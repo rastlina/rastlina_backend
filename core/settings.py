@@ -149,7 +149,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5174",
     "http://localhost:8080",
 ]
-SECURE_CROSS_ORIGIN_OPENER_POLICY = None
+SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin-allow-popups"
 
 # ─── STATIC & MEDIA ───────────────────────────────────────────────────────────
 STATIC_URL = '/static/'

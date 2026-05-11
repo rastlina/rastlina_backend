@@ -1,23 +1,11 @@
 """
-Rastlina Store Models
-
-Navigation Structure:
-─────────────────────
-Navbar Top Level (Fixed): Plants | Planters | Seeds | Care | Offers | Combos | Bulk
-  └── Plants submenu:
-      ├── By Size (dynamic from variants): All Plants / Large / Medium / Small
-      ├── Shop by Type (dynamic: Category filtered by plant main_category)
-      └── Shop by Space (dynamic: UsageTag / SpaceTag)
-  └── Planters submenu: (categories under PLANTER main_category)
-  └── Seeds submenu:    (categories under SEED main_category)
-  └── Care submenu:     (categories under CARE main_category)
-
-Model Hierarchy:
-────────────────
-MainCategory  →  Category  →  Product  →  ProductVariant (size/color)
-                                       →  ProductImage
-SpaceTag (shop by space / usage)
-Brand (optional for care/planters products)
+store/models.py — Updated
+Additions:
+  - Product.temperature: ideal temperature range (care guide)
+  - Product.growth_rate: how fast the plant grows (care guide)
+  - Product.plant_type: decorative/functional/flowering etc. for non-plant categories use blank
+  - SizeOption now also exposed via navbar API for dynamic "Shop by Size"
+  - ProductImage popup fix: color dropdown now scoped properly
 """
 
 from django.db import models
@@ -29,27 +17,14 @@ User = get_user_model()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN CATEGORY (Fixed top-level navbar items)
+# NAVIGATION
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MainCategory(models.Model):
-    """
-    Fixed top-level navbar sections.
-    Admin creates these once: Plants, Planters, Seeds, Care, Offers, Combos, Bulk
-    """
-    ICON_CHOICES = [
-        ('leaf', '🌿 Leaf'),
-        ('pot', '🪴 Pot'),
-        ('seedling', '🌱 Seedling'),
-        ('spray', '💧 Spray'),
-        ('tag', '🏷️ Offers'),
-        ('bundle', '📦 Bundle'),
-        ('truck', '🚚 Bulk'),
-    ]
-
-    name = models.CharField(max_length=100)          # "Plants", "Planters", etc.
+    name = models.CharField(max_length=100)
     slug = models.SlugField(unique=True, blank=True)
-    icon = models.CharField(max_length=50, blank=True, choices=ICON_CHOICES)
+    icon = models.CharField(max_length=50, blank=True,
+        help_text="Lucide icon name e.g. 'leaf', 'flower', 'sprout'")
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
 
@@ -67,32 +42,34 @@ class MainCategory(models.Model):
         return self.name
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CATEGORY (Dynamic sub-categories inside each main category)
-# ─────────────────────────────────────────────────────────────────────────────
+class HeroSlide(models.Model):
+    image = models.ImageField(upload_to='hero_slides/')
+    title = models.CharField(max_length=200, blank=True,
+        help_text="Overlay text e.g. 'Self Watering Pots'")
+    subtitle = models.CharField(max_length=200, blank=True)
+    link_url = models.CharField(max_length=255, blank=True,
+        help_text="Internal link e.g. /shop?collection=self-watering")
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['order']
+        verbose_name = "Hero Slide (Navbar Banner)"
+        verbose_name_plural = "Hero Slides (Navbar Banner)"
+
+    def __str__(self):
+        return self.title or f"Slide {self.order}"
+
 
 class Category(models.Model):
-    """
-    Dynamic categories managed from admin.
-    Examples under Plants main_category: Succulents, Tropical, Air-Purifying, Flowering
-    Examples under Planters: Ceramic, Terracotta, Hanging, Self-Watering
-    Examples under Seeds: Vegetable, Herb, Flower, Microgreens
-    Examples under Care: Fertilizers, Soil, Pesticides, Tools
-    """
     main_category = models.ForeignKey(
-        MainCategory,
-        on_delete=models.CASCADE,
-        related_name='categories',
-        help_text="Which top-level section does this belong to?"
-    )
+        MainCategory, on_delete=models.CASCADE, related_name='categories')
     name = models.CharField(max_length=100)
     slug = models.SlugField(unique=True, blank=True)
     image = models.ImageField(upload_to='categories/', null=True, blank=True)
     description = models.TextField(blank=True)
-    is_featured = models.BooleanField(
-        default=False,
-        help_text="Show in 'Explore by Category' on homepage"
-    )
+    is_featured = models.BooleanField(default=False,
+        help_text="Show in 'Explore by Category' on homepage")
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -108,26 +85,14 @@ class Category(models.Model):
         return f"{self.main_category.name} › {self.name}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SPACE TAG (Shop by Space / Curate your atmosphere)
-# ─────────────────────────────────────────────────────────────────────────────
-
 class SpaceTag(models.Model):
-    """
-    Tags for 'Shop by Space' / 'Curate your atmosphere' section.
-    Examples: Living Room, Bedroom, Balcony, Office, Kitchen, Bathroom
-    """
     name = models.CharField(max_length=100)
     slug = models.SlugField(unique=True, blank=True)
-    icon = models.CharField(
-        max_length=100, blank=True,
-        help_text="Lucide icon name e.g. 'sofa', 'bed', 'sun'"
-    )
+    icon = models.CharField(max_length=100, blank=True,
+        help_text="Lucide icon name e.g. 'sofa', 'bed', 'sun'")
     image = models.ImageField(upload_to='spaces/', null=True, blank=True)
-    is_featured = models.BooleanField(
-        default=False,
-        help_text="Show in 'Curate your atmosphere' on homepage"
-    )
+    is_featured = models.BooleanField(default=False,
+        help_text="Show in 'Curate your atmosphere' on homepage")
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -141,10 +106,6 @@ class SpaceTag(models.Model):
     def __str__(self):
         return self.name
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# BRAND (Optional — for planters, care products, seeds)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class Brand(models.Model):
     name = models.CharField(max_length=100)
@@ -161,106 +122,127 @@ class Brand(models.Model):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SIZE OPTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SizeOption(models.Model):
+    """
+    Admin adds sizes here. Variants pick from this dropdown.
+    Examples: Small | Medium | Large | Extra Large | 250ml | Standard
+    These are also exposed in the navbar for "Shop by Size".
+    """
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Size label shown on website e.g. 'Small', '250ml', 'Standard'"
+    )
+    order = models.PositiveIntegerField(
+        default=0,
+        help_text="Display order in dropdowns and on product page"
+    )
+    show_in_navbar = models.BooleanField(
+        default=True,
+        help_text="Show this size in the 'Shop by Size' section of the navbar"
+    )
+
+    class Meta:
+        ordering = ['order', 'name']
+        verbose_name = "Size Option"
+        verbose_name_plural = "Size Options"
+
+    def __str__(self):
+        return self.name
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COLOR OPTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ColorOption(models.Model):
+    """
+    Admin adds colors here. Variants AND images pick from this.
+    Examples: Terracotta (#C87941) | Sage Green (#8FAF6E) | Matte Black (#1A1A1A)
+    """
+    name = models.CharField(
+        max_length=100, unique=True,
+        help_text="Color name shown on website e.g. 'Terracotta', 'Sage Green'"
+    )
+    hex_code = models.CharField(
+        max_length=7, blank=True,
+        help_text="Hex color code e.g. #E07B54 — shown as color dot on product page"
+    )
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'name']
+        verbose_name = "Color Option"
+        verbose_name_plural = "Color Options"
+
+    def __str__(self):
+        return f"{self.name}" + (f" ({self.hex_code})" if self.hex_code else "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PRODUCT
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Product(models.Model):
-    """
-    Central product model for all types: Plants, Planters, Seeds, Care products.
-    
-    For Plants:    variants = sizes (Small/Medium/Large), colors = pot colors
-    For Planters:  variants = sizes (S/M/L/XL), colors = material colors
-    For Seeds:     variants = packet sizes (50g/100g/250g)
-    For Care:      variants = volume sizes (250ml/500ml/1L)
-    """
-
-    # Core
     name = models.CharField(max_length=255)
     slug = models.SlugField(unique=True, blank=True)
-    sku = models.CharField(max_length=50, unique=True, help_text="e.g. PLT-001, PLN-002")
+    sku = models.CharField(max_length=50, unique=True,
+        help_text="e.g. PLT-001, PLN-002")
     category = models.ForeignKey(
-        Category, on_delete=models.CASCADE, related_name='products'
-    )
+        Category, on_delete=models.CASCADE, related_name='products')
     brand = models.ForeignKey(
         Brand, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='products',
-        help_text="Optional — mainly for planters/care/seeds"
-    )
+        null=True, blank=True, related_name='products')
     space_tags = models.ManyToManyField(
-        SpaceTag, blank=True, related_name='products',
-        help_text="Which spaces is this plant/planter suited for?"
-    )
+        SpaceTag, blank=True, related_name='products')
 
     # Pricing
     price = models.DecimalField(max_digits=10, decimal_places=2)
     original_price = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True,
-        help_text="MRP / crossed-out price"
-    )
+        help_text="MRP / crossed-out price")
 
-    # Plant-specific fields (blank for non-plant products)
-    care_level = models.CharField(
-        max_length=50, blank=True,
+    # ── Plant Care Details ──────────────────────────────────────────────────
+    care_level = models.CharField(max_length=50, blank=True,
+        choices=[('easy', 'Easy Care'), ('moderate', 'Moderate'), ('expert', 'Expert')])
+    sunlight = models.CharField(max_length=100, blank=True,
+        help_text="e.g. 'Bright indirect light'")
+    watering = models.CharField(max_length=100, blank=True,
+        help_text="e.g. 'Once a week'")
+    temperature = models.CharField(
+        max_length=100, blank=True,
+        help_text="Ideal temperature range e.g. '18°C – 30°C' — shown in care guide"
+    )
+    growth_rate = models.CharField(
+        max_length=100, blank=True,
         choices=[
-            ('easy', 'Easy Care'),
+            ('slow', 'Slow'),
             ('moderate', 'Moderate'),
-            ('expert', 'Expert'),
+            ('fast', 'Fast'),
         ],
-        help_text="For plants: Easy / Moderate / Expert"
+        help_text="How fast the plant grows — shown in care guide"
     )
-    sunlight = models.CharField(
-        max_length=100, blank=True,
-        help_text="e.g. 'Bright indirect light', 'Low light'"
-    )
-    watering = models.CharField(
-        max_length=100, blank=True,
-        help_text="e.g. 'Once a week', 'When top inch is dry'"
-    )
-    pet_friendly = models.BooleanField(
-        null=True, blank=True,
-        help_text="Is this plant safe for pets? (plants only)"
-    )
-    air_purifying = models.BooleanField(
-        default=False,
-        help_text="Is this an air-purifying plant?"
-    )
+    pet_friendly = models.BooleanField(null=True, blank=True)
+    air_purifying = models.BooleanField(default=False)
 
     # Content
     description = models.TextField(blank=True)
-    highlights = models.TextField(
-        blank=True,
-        help_text="One highlight per line. e.g:\nPurifies air\nLow maintenance"
-    )
     care_instructions = models.TextField(
         blank=True,
-        help_text="Detailed care guide — one tip per line"
-    )
-
-    # Packaging & Delivery info
+        help_text="Detailed care guide — one tip per line. Shown in 'Care Guide' tab on product page.")
     what_you_get = models.TextField(
         blank=True,
-        help_text="What's included — one item per line. e.g:\n1 healthy plant\nEco-friendly packaging"
-    )
+        help_text="What's included — one item per line\ne.g.:\n1 healthy plant\nEco-friendly packaging\nCare card")
 
-    # Trust badges per product (override global)
-    warranty_info = models.CharField(
-        max_length=200, blank=True,
-        help_text="e.g. '7-day healthy plant guarantee'"
-    )
-    return_policy = models.CharField(
-        max_length=200, blank=True,
-        help_text="e.g. 'Damaged on arrival? We'll replace it.'"
-    )
-
-    # Homepage section toggles
+    # Homepage toggles
     is_new_arrival = models.BooleanField(default=False)
     is_best_seller = models.BooleanField(default=False)
     is_trending = models.BooleanField(default=False)
-    is_best_deal = models.BooleanField(default=False)
-    is_featured_home = models.BooleanField(
-        default=False,
-        help_text="Show on homepage hero / featured section"
-    )
+    is_best_deal = models.BooleanField(default=False,
+        help_text="✅ Tick to show in Golden Deals / Offers section")
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -288,125 +270,130 @@ class Product(models.Model):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRODUCT VARIANT (Size + Color combinations with stock)
+# DELIVERY ESTIMATE
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DeliveryEstimate(models.Model):
+    """
+    Each product can have multiple delivery rows.
+    Within Telangana  →  3-5 business days
+    Other States      →  5-7 business days
+    """
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name='delivery_estimates')
+    region = models.CharField(
+        max_length=100,
+        help_text="e.g. 'Within Telangana', 'Other States', 'North East India'"
+    )
+    estimate = models.CharField(
+        max_length=100,
+        help_text="e.g. '3-5 business days', 'Same day'"
+    )
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.product.sku} | {self.region}: {self.estimate}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRODUCT VARIANT
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ProductVariant(models.Model):
     """
-    Represents a specific combination of size + color for a product.
-    
-    Plant examples:
-      - Small / Green Pot
-      - Medium / Terracotta Pot
-      - Large / White Ceramic
-    
-    Planter examples:
-      - S / Matte Black
-      - M / Sage Green
-    
-    Seeds/Care examples:
-      - 50g Pack / N/A
-      - 500ml / N/A
+    Each variant = one Size + Color combination.
+    Color images are linked via ProductImage.color (not here).
+    price_override: extra ₹ on top of base product price.
+    stock: 0 = out of stock → frontend blocks add-to-cart and shows OOS banner.
     """
-    SIZE_CHOICES = [
-        # Plants
-        ('small', 'Small'),
-        ('medium', 'Medium'),
-        ('large', 'Large'),
-        ('xl', 'Extra Large'),
-        # Seeds / Care
-        ('25g', '25g'),
-        ('50g', '50g'),
-        ('100g', '100g'),
-        ('250g', '250g'),
-        ('250ml', '250ml'),
-        ('500ml', '500ml'),
-        ('1l', '1 Litre'),
-        # Generic
-        ('standard', 'Standard'),
-        ('s', 'S'),
-        ('m', 'M'),
-        ('l', 'L'),
-        ('xl', 'XL'),
-    ]
-
     product = models.ForeignKey(
-        Product, on_delete=models.CASCADE, related_name='variants'
-    )
-    size = models.CharField(
-        max_length=50,
-        choices=SIZE_CHOICES,
-        default='standard',
-        help_text="Size of this variant"
-    )
-    color = models.CharField(
-        max_length=100, blank=True,
-        help_text="Color name e.g. 'Terracotta', 'Sage Green', 'White Ceramic'"
-    )
-    color_hex = models.CharField(
-        max_length=7, blank=True,
-        help_text="Hex color code e.g. #E07B54 — shown as color swatch on frontend"
-    )
+        Product, on_delete=models.CASCADE, related_name='variants')
+    size = models.ForeignKey(
+        SizeOption, on_delete=models.PROTECT, related_name='variants',
+        help_text="Pick a size — add new sizes in 'Size Options' panel")
+    color = models.ForeignKey(
+        ColorOption, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='variants',
+        help_text="Pick a color — leave blank if no color variant. Add colors in 'Color Options' panel")
     stock = models.PositiveIntegerField(default=0)
     price_override = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00,
-        help_text="Extra amount added to base price. 0 = same as base price."
-    )
-    sku_suffix = models.CharField(
-        max_length=20, blank=True,
-        help_text="Optional variant-level SKU suffix e.g. -SM-TER"
-    )
+        help_text="Extra ₹ added to base price. Enter 0 for no change.")
 
     class Meta:
         unique_together = ('product', 'size', 'color')
-        ordering = ['size', 'color']
+        ordering = ['size__order', 'color__order']
 
     def __str__(self):
-        color_str = f" / {self.color}" if self.color else ""
-        return f"{self.product.sku} | {self.get_size_display()}{color_str}"
+        color_str = f" / {self.color.name}" if self.color else ""
+        return f"{self.product.sku} | {self.size.name}{color_str} (stock: {self.stock})"
 
     @property
     def final_price(self):
-        return float(self.product.price + self.price_override)
+        return float(self.product.price) + float(self.price_override)
 
     @property
     def final_original_price(self):
         if self.product.original_price:
-            return float(self.product.original_price + self.price_override)
+            return float(self.product.original_price) + float(self.price_override)
         return None
 
     @property
     def in_stock(self):
         return self.stock > 0
 
+    @property
+    def size_name(self):
+        return self.size.name
+
+    @property
+    def color_name(self):
+        return self.color.name if self.color else ""
+
+    @property
+    def color_hex(self):
+        return self.color.hex_code if self.color else ""
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRODUCT IMAGE
+# PRODUCT IMAGE — Linked to ColorOption directly (cleaner than variant FK)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ProductImage(models.Model):
     """
     Multiple images per product.
-    Can be linked to a specific variant (e.g. green pot vs terracotta pot image).
+    Link to a ColorOption so the right images show when that color is selected.
+    Leave color blank for generic/lifestyle images shown regardless of color choice.
     """
     product = models.ForeignKey(
-        Product, on_delete=models.CASCADE, related_name='images'
-    )
-    variant = models.ForeignKey(
-        ProductVariant, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='images',
-        help_text="Link this image to a specific variant (optional)"
+        Product, on_delete=models.CASCADE, related_name='images')
+    color = models.ForeignKey(
+        ColorOption, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='product_images',
+        help_text=(
+            "(Optional) Which color does this image belong to? "
+            "When the customer selects this color, these images will be shown first. "
+            "Leave blank for images that apply to all colors."
+        )
     )
     image = models.ImageField(upload_to='products/')
     alt_text = models.CharField(max_length=200, blank=True)
-    is_primary = models.BooleanField(default=False)
-    order = models.PositiveIntegerField(default=0)
+    is_primary = models.BooleanField(
+    default=False,
+    help_text="Featured image. Multiple images can be marked as primary."
+)
+    order = models.PositiveIntegerField(default=0,
+        help_text="Display order — lower number = shown first")
 
     class Meta:
         ordering = ['order', 'id']
 
     def __str__(self):
-        return f"Image for {self.product.sku}"
+        color_str = f" [{self.color.name}]" if self.color else ""
+        return f"{'[PRIMARY] ' if self.is_primary else ''}Image for {self.product.sku}{color_str}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -415,23 +402,19 @@ class ProductImage(models.Model):
 
 class Review(models.Model):
     product = models.ForeignKey(
-        Product, on_delete=models.CASCADE, related_name='reviews'
-    )
+        Product, on_delete=models.CASCADE, related_name='reviews')
     user = models.ForeignKey(
         User, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='reviews'
-    )
-    user_name = models.CharField(max_length=100)    # Cached display name
+        null=True, blank=True, related_name='reviews')
+    user_name = models.CharField(max_length=100)
     rating = models.IntegerField(choices=[(i, i) for i in range(1, 6)])
     title = models.CharField(max_length=200, blank=True)
     comment = models.TextField()
-    image = models.ImageField(upload_to='reviews/', null=True, blank=True)
-    variant_info = models.CharField(
-        max_length=200, blank=True,
-        help_text="e.g. 'Medium / Terracotta Pot'"
-    )
+    variant_info = models.CharField(max_length=200, blank=True,
+        help_text="e.g. 'Medium / Terracotta Pot'")
     is_verified_purchase = models.BooleanField(default=False)
-    is_featured = models.BooleanField(default=False)
+    is_featured = models.BooleanField(default=False,
+        help_text="Show on homepage testimonials section")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -442,28 +425,48 @@ class Review(models.Model):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WATCH AND SHOP (Video section on homepage)
+# FAQ
 # ─────────────────────────────────────────────────────────────────────────────
 
-class WatchAndShop(models.Model):
-    """
-    'Watch and Shop' section on homepage.
-    Up to 4 videos. Each has thumbnail + linked product.
-    """
-    title = models.CharField(max_length=200)
-    video_url = models.URLField(
-        help_text="YouTube/Vimeo embed URL or direct video URL"
-    )
-    thumbnail = models.ImageField(
-        upload_to='watch_shop/',
-        help_text="Thumbnail shown before video plays (also shown in cart if linked)"
-    )
-    product = models.ForeignKey(
-        Product, on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='watch_videos',
-        help_text="Link to a product for 'Shop Now' button"
-    )
+class FAQ(models.Model):
+    question = models.CharField(max_length=300)
+    answer = models.TextField()
     order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['order']
+        verbose_name = "FAQ"
+        verbose_name_plural = "FAQs"
+
+    def __str__(self):
+        return self.question[:80]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WATCH AND SHOP
+# ─────────────────────────────────────────────────────────────────────────────
+class WatchAndShop(models.Model):
+    title = models.CharField(max_length=200)
+
+    slug = models.SlugField(unique=True, blank=True)
+
+    video_url = models.URLField(
+        help_text="YouTube embed URL e.g. https://www.youtube.com/embed/xxxxx"
+    )
+
+    thumbnail = models.ImageField(upload_to='watch_shop/')
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='watch_videos'
+    )
+
+    order = models.PositiveIntegerField(default=0)
+
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -471,32 +474,36 @@ class WatchAndShop(models.Model):
         verbose_name = "Watch & Shop Video"
         verbose_name_plural = "Watch & Shop Videos"
 
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.title)
+
+        super().save(*args, **kwargs)
+
     def clean(self):
         from django.core.exceptions import ValidationError
+
         if self.is_active and WatchAndShop.objects.filter(
             is_active=True
         ).exclude(pk=self.pk).count() >= 4:
-            raise ValidationError("Maximum 4 active Watch & Shop videos allowed.")
+            raise ValidationError(
+                "Maximum 4 active Watch & Shop videos allowed."
+            )
 
     def __str__(self):
         return self.title
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SITE CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SiteConfig(models.Model):
-    """Global site settings — only one instance"""
     shipping_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     free_shipping_threshold = models.DecimalField(
-        max_digits=10, decimal_places=2, default=999.00
-    )
+        max_digits=10, decimal_places=2, default=999.00)
     tax_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
-    whatsapp_number = models.CharField(
-        max_length=20, default='919XXXXXXXXXX',
-        help_text="Include country code, no + sign. e.g. 919876543210"
-    )
+    whatsapp_number = models.CharField(max_length=20, default='919XXXXXXXXXX',
+        help_text="Include country code, no + e.g. 919876543210")
     instagram_url = models.URLField(blank=True)
     facebook_url = models.URLField(blank=True)
     email = models.EmailField(blank=True)
