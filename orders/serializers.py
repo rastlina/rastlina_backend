@@ -156,7 +156,7 @@ class OrderSerializer(serializers.ModelSerializer):
         return self.get_can_request_exchange(obj)
 
     def get_can_cancel(self, obj):
-        return obj.order_status in ('Pending', 'Processing', 'Confirmed')
+        return obj.order_status in ('Pending', 'Processing')
 
 
 class OrderTrackingSerializer(serializers.ModelSerializer):

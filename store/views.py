@@ -497,11 +497,10 @@ class ValidateCouponView(APIView):
                     {'error': f'Minimum order of ₹{coupon.min_order_value} required'},
                     status=400
                 )
-            discount = (
-                (order_total * coupon.value / 100)
-                if coupon.discount_type == 'percentage'
-                else coupon.value
-            )
+            if coupon.discount_type == 'percentage':
+                discount = round(order_total * coupon.value / 100)
+            else:
+                discount = min(coupon.value, order_total)
             return Response({
                 'success': True, 'code': coupon.code,
                 'discount_type': coupon.discount_type,

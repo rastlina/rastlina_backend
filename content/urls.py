@@ -1,3 +1,6 @@
 from django.urls import path
+from .views import HomeContentAPIView
 
-urlpatterns = []
+urlpatterns = [
+    path('home-content/', HomeContentAPIView.as_view()),
+]

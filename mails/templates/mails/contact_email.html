@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+    <div style="max-width: 600px; margin: 20px auto; border: 1px solid #ddd; padding: 20px; border-radius: 10px;">
+        <h2 style="color: #2D5A27; border-bottom: 2px solid #2D5A27; padding-bottom: 10px;">New Bulk Inquiry</h2>
+        <p><strong>Customer:</strong> {{ name }}</p>
+        <p><strong>Email:</strong> {{ email }}</p>
+        <p><strong>Phone:</strong> {{ phone }}</p>
+        <p><strong>Type:</strong> {{ issue_type }}</p>
+        <div style="background: #f4f4f4; padding: 15px; border-radius: 5px; margin-top: 15px;">
+            <strong>Message:</strong><br/>
+            {{ message|linebreaks }}
+        </div>
+        <footer style="margin-top: 20px; font-size: 11px; color: #999; text-align: center;">
+            Sent from Rastlina Corporate Portal
+        </footer>
+    </div>
+</body>
+</html>

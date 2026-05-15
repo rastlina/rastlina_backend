@@ -6,30 +6,155 @@ from django.contrib import admin
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.html import format_html
-
+from django.contrib import messages
+from .services import approve_return_request
+from .services import approve_exchange_request
 from .models import ExchangeCode, Order, OrderItem, OrderReturnRequest, ReturnRequest
+import tempfile
+import requests
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from openpyxl.drawing.image import Image as XLImage
 
-def export_to_csv(modeladmin, request, queryset):
-    response = HttpResponse(content_type='text/csv')
-    response['Content-Disposition'] = 'attachment; filename=orders.csv'
-    writer = csv.writer(response)
-    writer.writerow([
-        'Order ID', 'Name', 'Phone', 'Total',
-        'Payment Status', 'Order Status',
-        'Address', 'City', 'State', 'Date',
-    ])
-    for o in queryset:
-        writer.writerow([
-            o.id, f'{o.first_name} {o.last_name}'.strip(), o.phone,
-            o.total_amount, o.payment_status, o.order_status,
-            o.shipping_address, o.city, o.state,
-            timezone.localtime(o.created_at).strftime('%d-%m-%Y %H:%M'),
-        ])
+def export_to_excel(modeladmin, request, queryset):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Orders"
+
+    headers = [
+        'Order ID',
+        'Date',
+        'Customer',
+        'Phone',
+        'Email',
+        'Payment Status',
+        'Order Status',
+        'Payment Method',
+        'Address',
+        'City',
+        'State',
+        'Pincode',
+        'SKU',
+        'Product',
+        'Variant',
+        'Quantity',
+        'Unit Price',
+        'Line Total',
+
+        'Image',
+    ]
+
+    ws.append(headers)
+
+    # Header styling
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    row_num = 2
+
+    for order in queryset.prefetch_related('items'):
+
+        for item in order.items.all():
+            sku = getattr(item, 'sku', '') or getattr(item.product, 'sku', '—')
+
+            product_name = item.product_name
+
+            variant = item.variant_label or '—'
+
+            quantity = item.quantity
+
+            unit_price = float(item.price)
+
+            line_total = quantity * unit_price
+
+            address = " ".join(filter(None, [
+                order.shipping_address,
+                order.apartment,
+                order.landmark,
+            ]))
+
+            ws.cell(row=row_num, column=1, value=order.id)
+            ws.cell(row=row_num, column=2, value=timezone.localtime(order.created_at).strftime('%d-%m-%Y %H:%M'))
+            ws.cell(row=row_num, column=3, value=f"{order.first_name} {order.last_name}")
+            ws.cell(row=row_num, column=4, value=order.phone)
+            ws.cell(row=row_num, column=5, value=order.email)
+            ws.cell(row=row_num, column=6, value=order.payment_status)
+            ws.cell(row=row_num, column=7, value=order.order_status)
+            ws.cell(row=row_num, column=8, value=order.payment_method)
+
+            ws.cell(row=row_num, column=9, value=address)
+            ws.cell(row=row_num, column=10, value=order.city)
+            ws.cell(row=row_num, column=11, value=order.state)
+            ws.cell(row=row_num, column=12, value=order.zip_code)
+
+            ws.cell(row=row_num, column=13, value=sku)
+            ws.cell(row=row_num, column=14, value=product_name)
+            ws.cell(row=row_num, column=15, value=variant)
+            ws.cell(row=row_num, column=16, value=quantity)
+            ws.cell(row=row_num, column=17, value=unit_price)
+            ws.cell(row=row_num, column=18, value=line_total)
+            # Add image
+            if item.image_url:
+                try:
+                    response = requests.get(item.image_url, timeout=10)
+
+                    if response.status_code == 200:
+                        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                        tmp.write(response.content)
+                        tmp.close()
+
+                        img = XLImage(tmp.name)
+                        img.width = 60
+                        img.height = 60
+
+                        ws.add_image(img, f'S{row_num}')
+
+                        ws.row_dimensions[row_num].height = 50
+
+                except Exception:
+                    pass
+
+            row_num += 1
+
+    # Column widths
+    widths = {
+        'A': 12,
+        'B': 20,
+        'C': 25,
+        'D': 18,
+        'E': 28,
+        'F': 18,
+        'G': 18,
+        'H': 18,
+        'I': 40,
+        'J': 18,
+        'K': 18,
+        'L': 14,
+        'M': 18,   # SKU
+        'N': 35,   # Product
+        'O': 25,   # Variant
+        'P': 10,   # Qty
+        'Q': 14,   # Unit Price
+        'R': 14,   # Line Total
+        'S': 18,   # Image
+    }
+
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+    response['Content-Disposition'] = 'attachment; filename=orders.xlsx'
+
+    wb.save(response)
+
     return response
 
-export_to_csv.short_description = 'Export selected orders to CSV'
 
+export_to_excel.short_description = "Export selected orders to Excel"
 
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
@@ -54,7 +179,7 @@ class OrderAdmin(admin.ModelAdmin):
     list_filter = ['payment_status', 'order_status', 'created_at']
     search_fields = ['id', 'first_name', 'last_name', 'email', 'phone', 'razorpay_order_id']
     readonly_fields = ['created_at', 'updated_at', 'razorpay_order_id', 'razorpay_payment_id']
-    actions = [export_to_csv]
+    actions = [export_to_excel]
     inlines = [OrderItemInline]
     list_per_page = 25
     fieldsets = (
@@ -109,13 +234,31 @@ class OrderAdmin(admin.ModelAdmin):
 # ─── Exchange Request admin ───────────────────────────────────────────────────
 
 def approve_exchange_and_generate_code(modeladmin, request, queryset):
-    for req in queryset.filter(status='Pending'):
-        req.status = 'Approved'
-        req.save()  # signal auto-creates ExchangeCode
+    success_count = 0
 
-approve_exchange_and_generate_code.short_description = 'Approve & generate exchange codes'
+    for req in queryset:
+        result = approve_exchange_request(req.id)
+
+        if result.get('success'):
+            success_count += 1
+        else:
+            modeladmin.message_user(
+                request,
+                f"Exchange #{req.id} failed: {result.get('error')}",
+                level=messages.ERROR,
+            )
+
+    if success_count:
+        modeladmin.message_user(
+            request,
+            f"{success_count} exchange request(s) approved successfully.",
+            level=messages.SUCCESS,
+        )
 
 
+approve_exchange_and_generate_code.short_description = (
+    'Approve & generate exchange codes'
+)
 def reject_exchange(modeladmin, request, queryset):
     queryset.filter(status='Pending').update(
         status='Rejected',
@@ -155,10 +298,38 @@ class ExchangeRequestAdmin(admin.ModelAdmin):
 # ─── Return Request admin ─────────────────────────────────────────────────────
 
 def approve_return(modeladmin, request, queryset):
-    queryset.filter(status='Pending').update(status='Approved')
+    """
+    Approve physical return requests AND restore stock.
+    """
 
-approve_return.short_description = 'Approve selected return requests'
+    success_count = 0
 
+    for req in queryset:
+        result = approve_return_request(
+            req.id,
+            restore_stock=True,   # IMPORTANT
+        )
+
+        if result.get('success'):
+            success_count += 1
+        else:
+            modeladmin.message_user(
+                request,
+                f"Return #{req.id} failed: {result.get('error')}",
+                level=messages.ERROR,
+            )
+
+    if success_count:
+        modeladmin.message_user(
+            request,
+            f"{success_count} return request(s) approved successfully.",
+            level=messages.SUCCESS,
+        )
+
+
+approve_return.short_description = (
+    'Approve selected return requests & restore stock'
+)
 
 def reject_return(modeladmin, request, queryset):
     queryset.filter(status='Pending').update(
