@@ -7,7 +7,13 @@ Changes:
   - Added temperature + growth_rate to Plant Details fieldset
   - SizeOption admin: show_in_navbar field exposed
 """
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.contrib.admin.utils import unquote
+from django.core.exceptions import PermissionDenied
+from django.http import Http404, HttpResponseRedirect, HttpResponseNotAllowed
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
+from .product_duplication import duplicate_product
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django import forms
@@ -216,7 +222,7 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = (
         'sku', 'name', 'category', 'price', 'original_price',
         'is_new_arrival', 'is_best_seller', 'is_trending', 'is_best_deal',
-        'is_active', 'stock_status'
+        'is_active', 'stock_status', 'duplicate_button'
     )
     list_editable = (
         'is_new_arrival', 'is_best_seller', 'is_trending', 'is_best_deal', 'is_active'
@@ -231,6 +237,58 @@ class ProductAdmin(admin.ModelAdmin):
     filter_horizontal = ('space_tags',)
     inlines = [ProductImageInline, ProductVariantInline, DeliveryEstimateInline]
     save_on_top = True
+    actions = ("duplicate_selected_products",)
+
+    @admin.display(description="Duplicate")
+    def duplicate_button(self, obj):
+        return format_html('<a class="button" href="{}">Duplicate</a>',
+                           reverse("admin:store_product_duplicate", args=[obj.pk]))
+
+    def get_urls(self):
+        return [
+            path("<path:object_id>/duplicate/",
+                 self.admin_site.admin_view(self.duplicate_view),
+                 name="store_product_duplicate"),
+        ] + super().get_urls()
+
+    def duplicate_view(self, request, object_id):
+        source = self.get_object(request, unquote(object_id))
+        if source is None:
+            raise Http404
+        if not self.has_add_permission(request) or not self.has_change_permission(request, source):
+            raise PermissionDenied
+        if request.method == "POST":
+            clone = duplicate_product(source)
+            self.log_addition(request, clone, "Duplicated from product #%s" % source.pk)
+            self.message_user(request, "Draft copy created. Edit its name, SKU, images and stock before activating it.", messages.SUCCESS)
+            return HttpResponseRedirect(reverse("admin:store_product_change", args=[clone.pk]))
+        if request.method != "GET":
+            return HttpResponseNotAllowed(["GET", "POST"])
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "Duplicate product",
+            "opts": self.model._meta,
+            "original": source,
+            "source_product": source,
+        }
+        return TemplateResponse(request, "admin/store/product/duplicate.html", context)
+
+    @admin.action(description="Duplicate selected products as inactive drafts", permissions=["add"])
+    def duplicate_selected_products(self, request, queryset):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+        sources = list(queryset)
+        if any(not self.has_change_permission(request, obj) for obj in sources):
+            raise PermissionDenied
+        clones = []
+        for source in sources:
+            clone = duplicate_product(source)
+            self.log_addition(request, clone, "Duplicated from product #%s" % source.pk)
+            clones.append(clone)
+        self.message_user(request, "%s inactive draft copy/copies created. Review names, images and stock before activating." % len(clones), messages.SUCCESS)
+        if len(clones) == 1:
+            return HttpResponseRedirect(reverse("admin:store_product_change", args=[clones[0].pk]))
+
 
     fieldsets = (
         ('📦 Core Info', {
@@ -331,26 +389,40 @@ class FAQAdmin(admin.ModelAdmin):
 
 @admin.register(WatchAndShop)
 class WatchAndShopAdmin(admin.ModelAdmin):
-    list_display = ('title', 'product', 'order', 'is_active', 'thumbnail_preview')
-    list_editable = ('order', 'is_active')
-    readonly_fields = ('thumbnail_preview',)
+    list_display = ("title", "product", "order", "is_active", "thumbnail_preview")
+    list_editable = ("order", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("title", "product__name", "product__sku")
+    autocomplete_fields = ("product",)
+    prepopulated_fields = {"slug": ("title",)}
+    readonly_fields = ("thumbnail_preview", "video_preview")
+    fieldsets = (
+        ("Video and product", {"fields": ("title", "slug", "video_file", "product")}),
+        ("Preview", {"fields": ("thumbnail", "thumbnail_preview", "video_preview")}),
+        ("Homepage", {"fields": ("order", "is_active"),
+                      "description": "Up to four active MP4 videos. Lower order appears first."}),
+    )
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        field = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if db_field.name == "video_file" and field:
+            field.widget.attrs["accept"] = ".mp4,video/mp4"
+        return field
+
+    @admin.display(description="Thumbnail")
     def thumbnail_preview(self, obj):
         if obj.thumbnail:
-            return format_html(
-                '<img src="{}" style="width:120px;height:auto;border-radius:8px;" />',
-                obj.thumbnail.url
-            )
-        return "No thumbnail"
+            return format_html('<img src="{}" style="width:120px;border-radius:8px;" />', obj.thumbnail.url)
+        return "Uses the linked product image"
 
-    def save_model(self, request, obj, form, change):
-        try:
-            obj.clean()
-        except ValidationError as e:
-            from django.contrib import messages
-            messages.error(request, str(e.message))
-            return
-        super().save_model(request, obj, form, change)
+    @admin.display(description="Video preview")
+    def video_preview(self, obj):
+        if obj.video_file:
+            return format_html(
+                '<video src="{}" controls muted playsinline preload="metadata" style="width:180px;max-height:320px;"></video>',
+                obj.video_file.url,
+            )
+        return "Upload an MP4 video"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

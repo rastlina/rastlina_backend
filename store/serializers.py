@@ -317,28 +317,36 @@ class ProductSearchSerializer(serializers.ModelSerializer):
 
 # ─────────────────────────────────────────────────────────────────────────────
 class WatchAndShopSerializer(serializers.ModelSerializer):
-    product_slug = serializers.CharField(source='product.slug', read_only=True)
+    product_slug = serializers.CharField(source="product.slug", read_only=True)
+    video_url = serializers.SerializerMethodField()
     thumbnail = serializers.SerializerMethodField()
 
+    def get_video_url(self, obj):
+        if not obj.video_file:
+            return ""
+        request = self.context.get("request")
+        url = obj.video_file.url
+        return request.build_absolute_uri(url) if request else url
+
     def get_thumbnail(self, obj):
-        request = self.context.get('request')
+        request = self.context.get("request")
         if obj.thumbnail:
-               url = obj.thumbnail.url
-               return request.build_absolute_uri(url) if request else url
-           # Fallback: use linked product primary image
-        primary = (
-                obj.product.images.filter(is_primary=True)
-                .order_by('order', 'id')
-                .first()
-            )
-        if primary and request:
-            return request.build_absolute_uri(primary.image.url)
-        return ''
+            url = obj.thumbnail.url
+        elif obj.product_id:
+            image = obj.product.images.filter(is_primary=True).order_by("order", "id").first()
+            image = image or obj.product.images.order_by("order", "id").first()
+            if not image:
+                return ""
+            url = image.image.url
+        else:
+            return ""
+        return request.build_absolute_uri(url) if request else url
 
     class Meta:
-           model = WatchAndShop
-           fields = ['id', 'title', 'slug', 'video_url', 'thumbnail',
-                     'order', 'is_active', 'product_slug']
+        model = WatchAndShop
+        fields = ["id", "title", "slug", "video_url", "thumbnail",
+                  "order", "is_active", "product_slug"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SITE CONFIG & COUPON
