@@ -9,6 +9,8 @@ Additions:
 """
 
 from django.db import models
+from django.core.validators import FileExtensionValidator
+from .validators import validate_mp4_upload
 from django.utils.text import slugify
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -451,11 +453,18 @@ class WatchAndShop(models.Model):
 
     slug = models.SlugField(unique=True, blank=True)
 
-    video_url = models.URLField(
-        help_text="YouTube embed URL e.g. https://www.youtube.com/embed/xxxxx"
+    # Retained in the database for migration compatibility; hidden from the admin.
+    video_url = models.URLField(blank=True, default="", help_text="Legacy video URL (unused).")
+    video_file = models.FileField(
+        upload_to="watch_shop/videos/", blank=True,
+        validators=[FileExtensionValidator(["mp4"]), validate_mp4_upload],
+        help_text="Upload an H.264 MP4, ideally under 5 MB (maximum 20 MB).",
     )
 
-    thumbnail = models.ImageField(upload_to='watch_shop/')
+    thumbnail = models.ImageField(
+        upload_to="watch_shop/", blank=True,
+        help_text="Optional preview image. Uses the product image when left blank.",
+    )
 
     product = models.ForeignKey(
         Product,
@@ -481,14 +490,20 @@ class WatchAndShop(models.Model):
         super().save(*args, **kwargs)
 
     def clean(self):
+        super().clean()
         from django.core.exceptions import ValidationError
-
-        if self.is_active and WatchAndShop.objects.filter(
-            is_active=True
-        ).exclude(pk=self.pk).count() >= 4:
-            raise ValidationError(
-                "Maximum 4 active Watch & Shop videos allowed."
-            )
+        errors = {}
+        if self.is_active:
+            if not self.video_file:
+                errors["video_file"] = "Upload an MP4 before activating this video."
+            if not self.product_id:
+                errors["product"] = "Choose the product for the Shop Now button."
+            elif not self.product.is_active:
+                errors["product"] = "Choose an active product for Shop Now."
+            if WatchAndShop.objects.filter(is_active=True).exclude(pk=self.pk).count() >= 4:
+                errors["is_active"] = "Maximum 4 active Watch & Shop videos allowed."
+        if errors:
+            raise ValidationError(errors)
 
     def __str__(self):
         return self.title

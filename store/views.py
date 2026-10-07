@@ -527,12 +527,14 @@ class SiteConfigView(APIView):
 
 class WatchAndShopListView(generics.ListAPIView):
     permission_classes = [AllowAny]
-    queryset = WatchAndShop.objects.filter(is_active=True).order_by('order')
+    queryset = (WatchAndShop.objects.filter(is_active=True, product__is_active=True)
+                .exclude(video_file="").select_related("product").order_by("order", "id"))
     serializer_class = WatchAndShopSerializer
 
 class WatchAndShopDetailView(generics.RetrieveAPIView):
     permission_classes = [AllowAny]
-    queryset = WatchAndShop.objects.filter(is_active=True)
+    queryset = (WatchAndShop.objects.filter(is_active=True, product__is_active=True)
+                .exclude(video_file="").select_related("product"))
     serializer_class = WatchAndShopSerializer
     lookup_field = 'slug'
 

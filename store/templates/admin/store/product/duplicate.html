@@ -1,0 +1,15 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div class="card"><div class="card-body">
+  <h2>Duplicate {{ source_product.name }}</h2>
+  <p>This creates an inactive draft with the same prices, care details, category,
+     images, variants, stock, space tags and delivery estimates.</p>
+  <p>The draft gets a new SKU and URL. Reviews and customer orders are not copied.</p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-primary">Create draft copy</button>
+    <a class="btn btn-secondary" href="{% url 'admin:store_product_changelist' %}">Cancel</a>
+  </form>
+</div></div>
+{% endblock %}
+
