@@ -223,6 +223,10 @@ class ProductListSerializer(serializers.ModelSerializer):
         return obj.reviews.count()
 
     def get_average_rating(self, obj):
+        reviews = getattr(obj, '_prefetched_objects_cache', {}).get('reviews')
+        if reviews is not None:
+            ratings = [review.rating for review in reviews]
+            return round(sum(ratings) / len(ratings), 1) if ratings else 0
         avg = obj.reviews.aggregate(Avg('rating'))['rating__avg']
         return round(avg, 1) if avg else 0
 
@@ -232,12 +236,22 @@ class ProductListSerializer(serializers.ModelSerializer):
         return 0
 
     def get_available_sizes(self, obj):
+        variants = getattr(obj, '_prefetched_objects_cache', {}).get('variants')
+        if variants is not None:
+            sizes = {variant.size_id: variant.size for variant in variants}
+            return [{'id': size.id, 'name': size.name}
+                    for size in sorted(sizes.values(), key=lambda size: size.order)]
         sizes = obj.variants.select_related('size').values(
             'size__id', 'size__name', 'size__order'
         ).distinct().order_by('size__order')
         return [{'id': s['size__id'], 'name': s['size__name']} for s in sizes]
 
     def get_available_colors(self, obj):
+        variants = getattr(obj, '_prefetched_objects_cache', {}).get('variants')
+        if variants is not None:
+            colors = {variant.color_id: variant.color for variant in variants if variant.color_id is not None}
+            return [{'id': color.id, 'name': color.name, 'hex_code': color.hex_code}
+                    for color in sorted(colors.values(), key=lambda color: color.order)]
         colors = obj.variants.filter(color__isnull=False).select_related('color').values(
             'color__id', 'color__name', 'color__hex_code', 'color__order'
         ).distinct().order_by('color__order')
@@ -247,6 +261,9 @@ class ProductListSerializer(serializers.ModelSerializer):
         ]
 
     def get_in_stock(self, obj):
+        variants = getattr(obj, '_prefetched_objects_cache', {}).get('variants')
+        if variants is not None:
+            return any(variant.stock > 0 for variant in variants)
         return obj.variants.filter(stock__gt=0).exists()
 
 
@@ -300,10 +317,13 @@ class ProductSearchSerializer(serializers.ModelSerializer):
         ]
 
     def get_image(self, obj):
-        primary = (
-            obj.images.filter(is_primary=True).order_by('order', 'id').first()
-            or obj.images.order_by('order', 'id').first()
-)
+        images = getattr(obj, '_prefetched_objects_cache', {}).get('images')
+        if images is not None:
+            ordered = sorted(images, key=lambda image: (image.order, image.pk))
+            primary = next((image for image in ordered if image.is_primary), ordered[0] if ordered else None)
+        else:
+            primary = (obj.images.filter(is_primary=True).order_by('order', 'id').first()
+                       or obj.images.order_by('order', 'id').first())
         if primary:
             request = self.context.get('request')
             return request.build_absolute_uri(primary.image.url) if request else primary.image.url

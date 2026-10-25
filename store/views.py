@@ -10,6 +10,8 @@ from .models import Coupon
 from .serializers import CouponSerializer
 from rest_framework.generics import ListAPIView
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.gzip import gzip_page
 
 from .models import (
     MainCategory, HeroSlide, Category, SpaceTag, Brand,
@@ -138,6 +140,7 @@ class ColorOptionListView(generics.ListAPIView):
 # PRODUCT VIEWS
 # ─────────────────────────────────────────────────────────────────────────────
 
+@method_decorator(gzip_page, name='dispatch')
 class ProductListView(generics.ListAPIView):
     """
     GET /api/store/products/
@@ -161,7 +164,7 @@ class ProductListView(generics.ListAPIView):
 
     def get_queryset(self):
         qs = Product.objects.filter(is_active=True).prefetch_related(
-            'images', 'variants', 'variants__size', 'variants__color',
+            'images', 'images__color', 'variants', 'variants__size', 'variants__color',
             'space_tags', 'reviews'
         ).select_related('category', 'category__main_category', 'brand')
 
@@ -214,6 +217,7 @@ class ProductListView(generics.ListAPIView):
         return qs.distinct().order_by(ordering if ordering in valid else '-created_at')
 
 
+@method_decorator(gzip_page, name='dispatch')
 class ProductDetailView(generics.RetrieveAPIView):
     """GET /api/store/products/<slug>/"""
     queryset = Product.objects.filter(is_active=True).prefetch_related(
@@ -231,6 +235,7 @@ class ProductDetailView(generics.RetrieveAPIView):
         return ctx
 
 
+@method_decorator(gzip_page, name='dispatch')
 class RelatedProductsView(APIView):
     """
     GET /api/store/products/<slug>/related/
@@ -249,7 +254,7 @@ class RelatedProductsView(APIView):
 
         ctx = {'request': request}
         base_qs = Product.objects.filter(is_active=True).exclude(slug=slug).prefetch_related(
-            'images', 'variants', 'variants__size', 'variants__color', 'space_tags', 'reviews'
+            'images', 'images__color', 'variants', 'variants__size', 'variants__color', 'space_tags', 'reviews'
         ).select_related('category', 'category__main_category', 'brand')
 
         # Same category first
@@ -317,6 +322,7 @@ class FAQListView(generics.ListAPIView):
 # HOME DATA
 # ─────────────────────────────────────────────────────────────────────────────
 
+@method_decorator(gzip_page, name='dispatch')
 class HomeDataView(APIView):
     """GET /api/store/home-data/ — All homepage sections in one request"""
     permission_classes = [AllowAny]
@@ -328,7 +334,7 @@ class HomeDataView(APIView):
             return ProductListSerializer(
                 Product.objects.filter(is_active=True, **filters)
                 .prefetch_related(
-                    'images', 'variants', 'variants__size', 'variants__color', 'space_tags'
+                    'images', 'images__color', 'variants', 'variants__size', 'variants__color', 'space_tags', 'reviews'
                 )
                 .select_related('category', 'category__main_category', 'brand')[:limit],
                 many=True, context=ctx
@@ -366,6 +372,7 @@ class HomeDataView(APIView):
 # GLOBAL SEARCH
 # ─────────────────────────────────────────────────────────────────────────────
 
+@method_decorator(gzip_page, name='dispatch')
 class GlobalSearchView(APIView):
     """GET /api/store/search/?q=monstera"""
     permission_classes = [AllowAny]
