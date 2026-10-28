@@ -17,6 +17,8 @@ class PromotionTests(TestCase):
         self.client = APIClient()
         self.staff = CustomUser.objects.create_user('owner@example.invalid', is_staff=True)
         self.customer = CustomUser.objects.create_user('customer@example.invalid')
+        self.creator = CustomUser.objects.create_user('creator@example.invalid')
+        self.other_staff = CustomUser.objects.create_user('other-staff@example.invalid', is_staff=True, is_superuser=True)
         self.config = SiteConfig.objects.create(shipping_fee=99, free_shipping_threshold=499, tax_percentage=0)
         now = timezone.now()
         common = dict(valid_from=now-timedelta(days=1), valid_to=now+timedelta(days=1), usage_limit=100)
@@ -25,7 +27,8 @@ class PromotionTests(TestCase):
         self.diwali = Coupon.objects.create(code='DIWALI10', discount_type='percentage', value=10,
                                             min_order_value=199, combine_with_automatic=True, **common)
         self.influ = Coupon.objects.create(code='INFLU', discount_type='fixed', value=179,
-                                          min_order_value=0, staff_only=True, free_shipping=True, **common)
+                                          min_order_value=0, staff_only=True, free_shipping=True,
+                                          allowed_emails=[self.staff.email, self.creator.email], **common)
         main = MainCategory.objects.create(name='Plants')
         cat = Category.objects.create(name='Indoor', main_category=main)
         self.product = Product.objects.create(name='Plant', sku='TEST', category=cat, price=379)
@@ -69,10 +72,74 @@ class PromotionTests(TestCase):
         result = self.quote(2274, 'INFLU', self.staff)
         self.assertEqual([row['code'] for row in result['applied_discounts']], ['INFLU'])
 
-    def test_guest_and_regular_customers_cannot_use_influ(self):
-        for user in (None, self.customer):
-            with self.subTest(user=user), self.assertRaisesRegex(ValueError, 'authorised staff'):
+    def test_only_listed_accounts_can_use_influ_even_if_other_accounts_are_staff(self):
+        for user in (None, self.customer, self.other_staff):
+            with self.subTest(user=user), self.assertRaisesRegex(ValueError, 'authorised accounts'):
                 self.quote(199, 'INFLU', user)
+
+    def test_listed_nonstaff_account_gets_discount_and_free_shipping(self):
+        result = self.quote(199, 'INFLU', self.creator)
+        self.assertEqual((result['coupon_discount'], result['shipping_fee'], result['total']),
+                         ('179.00', '0.00', '20.00'))
+        self.creator.refresh_from_db()
+        self.assertFalse(self.creator.is_staff or self.creator.is_superuser)
+
+    def test_allowlist_is_case_insensitive_and_requires_active_login(self):
+        self.influ.allowed_emails = [' OWNER@EXAMPLE.INVALID ', 'CREATOR@example.invalid']
+        self.influ.save()
+        self.assertEqual(self.quote(199, 'INFLU', self.creator)['total'], '20.00')
+        self.creator.is_active = False
+        with self.assertRaises(ValueError):
+            self.quote(199, 'INFLU', self.creator)
+
+    def test_missing_or_malformed_influ_allowlist_denies_everyone(self):
+        for emails in ([], {}, 'owner@example.invalid', [self.staff.email, 3]):
+            with self.subTest(emails=emails):
+                self.influ.allowed_emails = emails
+                self.influ.save()
+                with self.assertRaises(ValueError):
+                    self.quote(199, 'INFLU', self.staff)
+
+    def test_admin_email_validation_and_normalisation(self):
+        from django.core.exceptions import ValidationError
+        for emails in ([], {}, ['invalid'], [123]):
+            self.influ.allowed_emails = emails
+            with self.subTest(emails=emails), self.assertRaises(ValidationError):
+                self.influ.full_clean()
+        self.influ.allowed_emails = [' CREATOR@EXAMPLE.INVALID ', self.creator.email, self.staff.email]
+        self.influ.full_clean()
+        self.assertEqual(self.influ.allowed_emails, [self.creator.email, self.staff.email])
+
+    def test_server_installer_configures_exact_emails_and_checks_real_quotes_without_privilege_changes(self):
+        from deployment.install_influ_access import configure_and_acceptance
+        self.influ.allowed_emails = [self.staff.email]
+        self.influ.save()
+        def run_django(command, log):
+            self.assertEqual(command[:2], ['shell', '-c'])
+            exec(command[2], {})
+        with patch('deployment.install_influ_access.installer.django', side_effect=run_django):
+            configure_and_acceptance(None, [self.staff.email, self.creator.email])
+        self.influ.refresh_from_db()
+        self.assertEqual(self.influ.allowed_emails, [self.staff.email, self.creator.email])
+
+    @patch('payments.razorpay_client.create_order', return_value={'id': 'creator_order', 'amount': 2000})
+    def test_checkout_enforces_account_email_not_submitted_email(self, gateway):
+        self.product.price = 199
+        self.product.save()
+        payload = self.payload('INFLU')
+        payload['items'][0]['quantity'] = 1
+        payload['email'] = self.creator.email
+        self.client.force_authenticate(self.other_staff)
+        response = self.client.post('/api/orders/checkout/', payload, format='json')
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(Order.objects.count(), 0)
+        gateway.assert_not_called()
+        self.client.force_authenticate(self.creator)
+        payload['email'] = 'delivery-recipient@example.invalid'
+        response = self.client.post('/api/orders/checkout/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        order = Order.objects.get(pk=response.data['order_id'])
+        self.assertEqual((order.total_amount, order.shipping_fee), (Decimal('20'), Decimal('0')))
 
     def test_private_codes_never_appear_in_public_lists(self):
         response = self.client.get('/api/store/active-coupons/')
@@ -81,6 +148,14 @@ class PromotionTests(TestCase):
         self.client.force_authenticate(self.staff)
         response = self.client.get('/api/store/active-coupons/')
         self.assertIn('INFLU', [row['code'] for row in response.data])
+        self.assertNotIn('allowed_emails', str(response.data))
+        self.client.force_authenticate(self.creator)
+        response = self.client.get('/api/store/active-coupons/')
+        self.assertIn('INFLU', [row['code'] for row in response.data])
+        self.assertNotIn(self.creator.email, str(response.data))
+        self.client.force_authenticate(self.other_staff)
+        response = self.client.get('/api/store/active-coupons/')
+        self.assertNotIn('INFLU', [row['code'] for row in response.data])
 
     def test_api_quote_enforces_staff_permission_and_returns_both_public_rows(self):
         response = self.client.post('/api/store/promotion-quote/', {'order_total': 2274, 'coupon_code': 'DIWALI10'})
@@ -233,7 +308,7 @@ class PromotionTests(TestCase):
         from orders.shipping_models import ShiprocketSync
         self.product.price = 100
         self.product.save()
-        self.client.force_authenticate(self.staff)
+        self.client.force_authenticate(self.creator)
         payload = self.payload('INFLU')
         payload['items'][0]['quantity'] = 1
         response = self.client.post('/api/orders/checkout/', payload, format='json')

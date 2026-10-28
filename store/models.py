@@ -554,7 +554,27 @@ class Coupon(models.Model):
     auto_apply = models.BooleanField(default=False, help_text='Apply automatically when the minimum spend is met.')
     combine_with_automatic = models.BooleanField(default=False, help_text='Allow this entered code plus the best automatic offer. Percentages use the original subtotal.')
     free_shipping = models.BooleanField(default=False, help_text='Waive delivery charges for this coupon. Set minimum order value to 0 for no minimum.')
-    staff_only = models.BooleanField(default=False, help_text='Private creator coupon. Only signed-in staff can use it; never listed publicly.')
+    staff_only = models.BooleanField(default=False, help_text='Restrict to staff unless Allowed emails is set. An email list permits only those accounts, without granting staff access.')
+    allowed_emails = models.JSONField(default=list, blank=True, help_text='Optional JSON list of permitted account emails. Takes priority over staff access. Required for INFLU; no other account can use it. Never exposed to customers.')
+
+    def clean(self):
+        super().clean()
+        from django.core.exceptions import ValidationError
+        from django.core.validators import validate_email
+        if not isinstance(self.allowed_emails, list) or not all(isinstance(value, str) for value in self.allowed_emails):
+            raise ValidationError({'allowed_emails': 'Enter a JSON list of email address strings.'})
+        normalised = []
+        for value in self.allowed_emails:
+            email = value.strip().casefold()
+            try:
+                validate_email(email)
+            except ValidationError:
+                raise ValidationError({'allowed_emails': 'Every entry must be a valid email address.'})
+            if email not in normalised:
+                normalised.append(email)
+        if self.code.strip().upper() == 'INFLU' and not normalised:
+            raise ValidationError({'allowed_emails': 'INFLU requires an explicit list of permitted account emails.'})
+        self.allowed_emails = normalised
 
     def is_valid(self):
         now = timezone.now()
