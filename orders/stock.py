@@ -24,7 +24,7 @@ RULES FOR CALLERS (enforced by design, not by this module):
   2. Check idempotency flags BEFORE calling:
        deduct:  only if order.stock_deducted == False
        restore: only if order.stock_deducted == True
-                     AND order.stock_restored == False
+                 AND order.stock_restored == False
   3. After a successful call, set the corresponding flag and save the Order:
        deduct:  order.stock_deducted = True
        restore: order.stock_restored = True
@@ -35,6 +35,7 @@ service layer (payments/services.py or orders/services.py).
 """
 
 import logging
+from store.models import Product, ProductVariant
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +55,11 @@ def deduct_stock_for_order(order) -> None:
       - Must check order.stock_deducted == False before calling.
       - Must set order.stock_deducted = True and save after this returns.
     """
-    for item in (
-        order.items
-        .select_related("variant", "variant__product", "product")
-        .select_for_update()
-        .all()
-    ):
-        if item.variant:
-            variant = item.variant
+    # FIXED: Iterate through the items directly to avoid select_for_update() on outer joins
+    for item in order.items.all():
+        if item.variant_id:
+            # Safely acquire an explicit row-lock directly on the Variant table by ID
+            variant = ProductVariant.objects.select_for_update().get(id=item.variant_id)
             if variant.stock < item.quantity:
                 raise ValueError(
                     f"Insufficient stock: variant {variant.id} ({variant}) "
@@ -75,8 +73,9 @@ def deduct_stock_for_order(order) -> None:
                 variant.id, item.quantity, variant.stock,
             )
 
-        elif item.product:
-            product = item.product
+        elif item.product_id:
+            # Safely acquire an explicit row-lock directly on the Product table by ID
+            product = Product.objects.select_for_update().get(id=item.product_id)
             if product.stock < item.quantity:
                 raise ValueError(
                     f"Insufficient stock: product {product.id} ({product}) "
@@ -115,26 +114,26 @@ def restore_stock_for_order(order) -> None:
       - Must check order.stock_restored == False (not already restored).
       - Must set order.stock_restored = True and save after this returns.
     """
-    for item in (
-        order.items
-        .select_related("variant", "variant__product", "product")
-        .select_for_update()
-        .all()
-    ):
-        if item.variant:
-            item.variant.stock += item.quantity
-            item.variant.save(update_fields=["stock"])
+    # FIXED: Iterate through the items directly to avoid select_for_update() on outer joins
+    for item in order.items.all():
+        if item.variant_id:
+            # Safely lock and fetch the variant record directly by ID
+            variant = ProductVariant.objects.select_for_update().get(id=item.variant_id)
+            variant.stock += item.quantity
+            variant.save(update_fields=["stock"])
             logger.debug(
                 "Stock restored — variant=%s  +%s  →  %s total",
-                item.variant.id, item.quantity, item.variant.stock,
+                variant.id, item.quantity, variant.stock,
             )
 
-        elif item.product:
-            item.product.stock += item.quantity
-            item.product.save(update_fields=["stock"])
+        elif item.product_id:
+            # Safely lock and fetch the product record directly by ID
+            product = Product.objects.select_for_update().get(id=item.product_id)
+            product.stock += item.quantity
+            product.save(update_fields=["stock"])
             logger.debug(
                 "Stock restored — product=%s  +%s  →  %s total",
-                item.product.id, item.quantity, item.product.stock,
+                product.id, item.quantity, product.stock,
             )
 
         else:

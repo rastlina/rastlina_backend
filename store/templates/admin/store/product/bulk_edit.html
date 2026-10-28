@@ -1,0 +1,34 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static %}
+{% block content %}
+<div id="content-main">
+  <p>Apply the checked fields below to all {{ products|length }} selected products. Unchecked fields stay unchanged.</p>
+  <div class="module" style="margin:16px 0;padding:12px 16px;">
+    <strong>Selected products</strong>
+    <ul style="columns:2;max-width:900px;">
+      {% for product in products %}<li>{{ product.sku }} — {{ product.name }}</li>{% endfor %}
+    </ul>
+  </div>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <input type="hidden" name="action" value="bulk_edit_selected_products">
+    <input type="hidden" name="select_across" value="0">
+    {% for product in products %}<input type="hidden" name="_selected_action" value="{{ product.pk }}">{% endfor %}
+    {{ form.product_ids }}
+    {% if form.non_field_errors %}<div class="errornote">{{ form.non_field_errors }}</div>{% endif %}
+    <div class="module aligned">
+      {% for field in form %}{% if field.name != "product_ids" %}
+        <div class="form-row" style="display:flex;align-items:flex-start;gap:12px;">
+          {% if "apply_" in field.name %}<div style="min-width:160px">{{ field }} <label for="{{ field.id_for_label }}">Apply this field</label></div>
+          {% else %}<div style="min-width:220px"><label for="{{ field.id_for_label }}">{{ field.label }}</label></div>{% endif %}
+          <div>{{ field.errors }}{% if "apply_" not in field.name %}{{ field }}{% endif %}</div>
+        </div>
+      {% endif %}{% endfor %}
+    </div>
+    <div class="submit-row">
+      <input type="submit" value="Save changes to selected products" class="default">
+      <a href="{% url 'admin:store_product_changelist' %}" class="button cancel-link">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -91,7 +91,15 @@ class GoogleLogin(SocialLoginView):
 
     def post(self, request, *args, **kwargs):
         # Ensure callback_url is set correctly
-        if hasattr(request.data, '_mutable'):
+        if isinstance(request.data, dict):
+            # Safe manipulation for standard parsed JSON dicts
+            request.data['callback_url'] = "postmessage"
+        elif hasattr(request.data, '_mutable'):
+            # Safe manipulation for multi-part Form Data QueryDicts
+            old_mutable = request.data._mutable
             request.data._mutable = True
-        request.data['callback_url'] = "postmessage"
+            request.data['callback_url'] = "postmessage"
+            request.data._mutable = old_mutable
+            
         return super().post(request, *args, **kwargs)
+

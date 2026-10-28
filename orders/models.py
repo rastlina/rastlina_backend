@@ -123,7 +123,9 @@ class Order(models.Model):
     # ── Tracking ──────────────────────────────────────────────────────────────
     tracking_link = models.URLField(max_length=500, blank=True, null=True)
     tracking_note = models.TextField(blank=True, null=True)
-
+    shiprocket_order_id = models.CharField(max_length=100, blank=True, null=True)
+    shiprocket_shipment_id = models.CharField(max_length=100, blank=True, null=True)
+    awb_code = models.CharField(max_length=100, blank=True)
     # ── Timestamps ────────────────────────────────────────────────────────────
     delivered_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -361,3 +363,7 @@ class OrderReturnRequest(models.Model):
 
     def __str__(self):
         return f"ReturnRequest #{self.id} — Order #{self.order_id} [{self.status}]"
+
+from .notification_models import OrderNotification  # merchant email outbox
+
+from .shipping_models import ShiprocketSync  # durable Shiprocket sync queue

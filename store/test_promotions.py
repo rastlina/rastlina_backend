@@ -212,3 +212,50 @@ class PromotionTests(TestCase):
         self.assertEqual(self.influ.min_order_value, 0)
         self.assertTrue(self.influ.staff_only)
         self.assertTrue(self.influ.free_shipping)
+
+    @patch('payments.razorpay_client.create_order', side_effect=[{'id': 'screenshot_guest', 'amount': 90960}, {'id': 'screenshot_customer', 'amount': 90960}])
+    def test_screenshot_cart_both_discounts_for_guest_and_customer(self, gateway):
+        for user in (None, self.customer):
+            self.client = APIClient()
+            if user is not None:
+                self.client.force_authenticate(user)
+            payload = self.payload()
+            payload['items'][0]['quantity'] = 3
+            response = self.client.post('/api/orders/checkout/', payload, format='json')
+            self.assertEqual(response.status_code, 201, response.data)
+            order = Order.objects.get(pk=response.data['order_id'])
+            self.assertEqual(order.total_amount, Decimal('909.60'))
+            self.assertEqual([row['discount'] for row in order.applied_discounts], ['113.70', '113.70'])
+
+    @patch('payments.razorpay_client.create_order')
+    def test_zero_total_still_queues_shipping_and_notification_only_once(self, gateway):
+        from orders.notification_models import OrderNotification
+        from orders.shipping_models import ShiprocketSync
+        self.product.price = 100
+        self.product.save()
+        self.client.force_authenticate(self.staff)
+        payload = self.payload('INFLU')
+        payload['items'][0]['quantity'] = 1
+        response = self.client.post('/api/orders/checkout/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        complete_zero_total_order(response.data['order_id'])
+        self.assertEqual(OrderNotification.objects.count(), 1)
+        self.assertEqual(ShiprocketSync.objects.count(), 1)
+        gateway.assert_not_called()
+
+    def test_duplicate_webhook_preserves_combined_usage_stock_and_shipping_queues(self):
+        from payments.services import capture_payment_from_webhook
+        from orders.models import OrderItem
+        from orders.notification_models import OrderNotification
+        from orders.shipping_models import ShiprocketSync
+        order = Order.objects.create(total_amount='909.60', coupon_code='DIWALI10',
+            razorpay_order_id='webhook_test', applied_discounts=self.quote(1137, 'DIWALI10')['applied_discounts'])
+        OrderItem.objects.create(order=order, product=self.product, variant=self.variant,
+            product_name='Plant', price=379, quantity=3)
+        for _ in range(2):
+            capture_payment_from_webhook('webhook_test', 'payment_test', 90960, {})
+        self.variant.refresh_from_db(); self.auto.refresh_from_db(); self.diwali.refresh_from_db()
+        self.assertEqual(self.variant.stock, 17)
+        self.assertEqual((self.auto.uses_count, self.diwali.uses_count), (1, 1))
+        self.assertEqual(OrderNotification.objects.count(), 1)
+        self.assertEqual(ShiprocketSync.objects.count(), 1)
