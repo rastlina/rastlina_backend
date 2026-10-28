@@ -107,20 +107,15 @@ def _consume_coupon_and_exchange(order: Order) -> None:
     """
     from store.models import Coupon  # local import to avoid circular
 
-    # Coupon
-    if order.coupon_code and not order.coupon_applied:
-        try:
-            coupon = Coupon.objects.select_for_update().get(
-                code=order.coupon_code, active=True,
-            )
+    # Snapshot codes identify every promotion actually deducted, including auto.
+    codes = {row.get('code') for row in order.applied_discounts if row.get('code')}
+    if not codes and order.coupon_code:
+        codes = {order.coupon_code}  # Historical single-coupon orders.
+    if codes and not order.coupon_applied:
+        for coupon in Coupon.objects.select_for_update().filter(code__in=codes).order_by('pk'):
             coupon.uses_count += 1
-            coupon.save(update_fields=["uses_count"])
-            order.coupon_applied = True
-        except Coupon.DoesNotExist:
-            logger.warning(
-                "Coupon %s not found during capture for order %s",
-                order.coupon_code, order.id,
-            )
+            coupon.save(update_fields=['uses_count'])
+        order.coupon_applied = True
 
     # Exchange code
     if order.exchange_code_used and not order.exchange_consumed:
@@ -138,6 +133,23 @@ def _consume_coupon_and_exchange(order: Order) -> None:
                 "Exchange code %s not found during capture for order %s",
                 order.exchange_code_used, order.id,
             )
+
+
+def complete_zero_total_order(order_id):
+    """Confirm a legitimately fully covered order once, without a gateway call."""
+    with transaction.atomic():
+        order = Order.objects.select_for_update().get(pk=order_id)
+        if order.total_amount != 0:
+            raise ValueError('This order requires payment.')
+        if order.payment_status == 'Paid':
+            return
+        if not order.stock_deducted:
+            deduct_stock_for_order(order)
+            order.stock_deducted = True
+        _consume_coupon_and_exchange(order)
+        order.payment_status = 'Paid'
+        order.order_status = 'Processing'
+        order.save(update_fields=['stock_deducted', 'coupon_applied', 'exchange_consumed', 'payment_status', 'order_status'])
 
 
 # ─── Payment capture — client callback ────────────────────────────────────────

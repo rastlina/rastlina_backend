@@ -442,8 +442,8 @@ class SiteConfigAdmin(admin.ModelAdmin):
 
 @admin.register(Coupon)
 class CouponAdmin(admin.ModelAdmin):
-    list_display = ('code', 'discount_type', 'value', 'active', 'valid_to', 'uses_count', 'is_valid_now')
-    list_filter = ('active', 'discount_type')
+    list_display = ('code', 'discount_type', 'value', 'auto_apply', 'combine_with_automatic', 'free_shipping', 'staff_only', 'active', 'valid_to', 'uses_count', 'is_valid_now')
+    list_filter = ('active', 'discount_type', 'auto_apply', 'free_shipping', 'staff_only')
     search_fields = ('code',)
     readonly_fields = ('uses_count',)
 

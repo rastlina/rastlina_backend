@@ -400,5 +400,5 @@ class CouponSerializer(serializers.ModelSerializer):
             'code',
             'discount_type',
             'value',
-            'min_order_value',
+            'min_order_value', 'auto_apply', 'combine_with_automatic', 'free_shipping', 'staff_only',
         ]

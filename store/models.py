@@ -551,6 +551,11 @@ class Coupon(models.Model):
     usage_limit = models.IntegerField(default=100)
     uses_count = models.IntegerField(default=0)
 
+    auto_apply = models.BooleanField(default=False, help_text='Apply automatically when the minimum spend is met.')
+    combine_with_automatic = models.BooleanField(default=False, help_text='Allow this entered code plus the best automatic offer. Percentages use the original subtotal.')
+    free_shipping = models.BooleanField(default=False, help_text='Waive delivery charges for this coupon. Set minimum order value to 0 for no minimum.')
+    staff_only = models.BooleanField(default=False, help_text='Private creator coupon. Only signed-in staff can use it; never listed publicly.')
+
     def is_valid(self):
         now = timezone.now()
         return (

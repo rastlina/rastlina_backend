@@ -16,7 +16,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = [
-            'id', 'product_name', 'product_slug',
+            'id', 'product_name', 'product_slug', 'variant_id',
             'variant_label', 'price', 'quantity', 'image_url', 'item_total',
         ]
 
@@ -85,7 +85,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'city', 'state', 'zip_code', 'country',
             'subtotal', 'discount_amount', 'shipping_fee',
             'cod_fee', 'tax_amount', 'total_amount',
-            'coupon_code', 'exchange_code_used',
+            'coupon_code', 'applied_discounts', 'exchange_code_used',
             'payment_method', 'payment_status', 'order_status',
             'razorpay_order_id', 'tracking_link', 'tracking_note',
             'accepted_return_policy', 'delivered_at', 'created_at',

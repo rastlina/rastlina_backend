@@ -484,38 +484,33 @@ class ProductFilterOptionsView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ValidateCouponView(APIView):
-    """POST /api/store/validate-coupon/  Body: { code, order_total }"""
     permission_classes = [AllowAny]
 
     def post(self, request):
-        code = request.data.get('code', '').strip().upper()
-        order_total = Decimal(str(request.data.get('order_total', 0)))
+        from .promotions import check_coupon, discount_for, money
+        code = str(request.data.get('code', '')).strip().upper()
         if not code:
-            return Response({'error': 'Coupon code required'}, status=400)
+            return Response({'error': 'Promo code required.'}, status=400)
         try:
-            coupon = Coupon.objects.get(code=code, active=True)
-            now = timezone.now()
-            if coupon.valid_from > now or coupon.valid_to < now:
-                return Response({'error': 'Coupon has expired'}, status=400)
-            if coupon.uses_count >= coupon.usage_limit:
-                return Response({'error': 'Coupon usage limit reached'}, status=400)
-            if order_total < coupon.min_order_value:
-                return Response(
-                    {'error': f'Minimum order of ₹{coupon.min_order_value} required'},
-                    status=400
-                )
-            if coupon.discount_type == 'percentage':
-                discount = round(order_total * coupon.value / 100)
-            else:
-                discount = min(coupon.value, order_total)
-            return Response({
-                'success': True, 'code': coupon.code,
-                'discount_type': coupon.discount_type,
-                'discount': float(discount),
-                'message': f'Coupon applied! You save ₹{discount:.0f}',
-            })
-        except Coupon.DoesNotExist:
-            return Response({'error': 'Invalid coupon code'}, status=404)
+            subtotal = money(request.data.get('order_total', 0))
+            coupon = check_coupon(code, subtotal, request.user)
+            return Response({**CouponSerializer(coupon).data, 'success': True,
+                             'discount': str(discount_for(coupon, subtotal))})
+        except ValueError as error:
+            return Response({'error': str(error)}, status=400)
+
+
+class PromotionQuoteView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .promotions import quote_promotions
+        try:
+            return Response(quote_promotions(request.data.get('order_total', 0),
+                str(request.data.get('coupon_code', '')).strip(), user=request.user,
+                config=SiteConfig.objects.first()))
+        except ValueError as error:
+            return Response({'error': str(error)}, status=400)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -530,7 +525,7 @@ class SiteConfigView(APIView):
         config = SiteConfig.objects.first()
         if not config:
             config = SiteConfig.objects.create()
-        return Response(SiteConfigSerializer(config).data)
+        return Response({**SiteConfigSerializer(config).data, 'promotion_policy_version': 2})
 
 class WatchAndShopListView(generics.ListAPIView):
     permission_classes = [AllowAny]
@@ -552,12 +547,8 @@ class WatchAndShopDetailView(generics.RetrieveAPIView):
 class ActiveCouponsView(ListAPIView):
     serializer_class = CouponSerializer
 
-    def get_queryset(self):
-        now = timezone.now()
+    permission_classes = [AllowAny]
 
-        return Coupon.objects.filter(
-            active=True,
-            valid_from__lte=now,
-            valid_to__gte=now,
-            uses_count__lt=models.F('usage_limit')
-        ).order_by('min_order_value')
+    def get_queryset(self):
+        from .promotions import eligible_coupons
+        return eligible_coupons(self.request.user).order_by('min_order_value')

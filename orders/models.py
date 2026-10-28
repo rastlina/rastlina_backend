@@ -76,6 +76,7 @@ class Order(models.Model):
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     coupon_code = models.CharField(max_length=50, blank=True)
+    applied_discounts = models.JSONField(default=list, blank=True)
     exchange_code_used = models.CharField(max_length=20, blank=True)
 
     # ── Status ────────────────────────────────────────────────────────────────

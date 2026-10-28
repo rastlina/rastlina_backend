@@ -6,7 +6,7 @@ from .views import (
     ProductListView, ProductDetailView, RelatedProductsView,
     ReviewListCreateView,
     FAQListView, HomeDataView, GlobalSearchView,
-    ValidateCouponView, SiteConfigView, ProductFilterOptionsView,WatchAndShopListView, WatchAndShopDetailView,ActiveCouponsView
+    ValidateCouponView, PromotionQuoteView, SiteConfigView, ProductFilterOptionsView,WatchAndShopListView, WatchAndShopDetailView,ActiveCouponsView
 )
 
 urlpatterns = [
@@ -26,6 +26,7 @@ urlpatterns = [
     path('search/', GlobalSearchView.as_view(), name='search'),
     path('filter-options/', ProductFilterOptionsView.as_view(), name='filter-options'),
     path('config/', SiteConfigView.as_view(), name='site-config'),
+    path('promotion-quote/', PromotionQuoteView.as_view(), name='promotion-quote'),
     path('validate-coupon/', ValidateCouponView.as_view(), name='validate-coupon'),
     path('watch-and-shop/', WatchAndShopListView.as_view(), name='watch-and-shop-list'),
     path('watch-and-shop/<slug:slug>/', WatchAndShopDetailView.as_view(), name='watch-and-shop-detail'),
