@@ -19,7 +19,7 @@ Key architecture decisions:
 """
 
 import logging
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.db import transaction
@@ -32,6 +32,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from store.models import Coupon, Product, ProductVariant, SiteConfig
+from store.promotions import quote_promotions
 from .models import ExchangeCode, Order, OrderItem, OrderReturnRequest, ReturnRequest
 from .serializers import (
     OrderSerializer,
@@ -281,30 +282,10 @@ class CheckoutView(APIView):
                         'image_url': img_url,
                     })
 
-                # ── Step 2: Validate coupon (read-only — not consumed here) ───
-                discount_amount = Decimal('0.00')
-                coupon_valid = False
-
-                if coupon_code:
-                    try:
-                        coupon = Coupon.objects.get(code=coupon_code, active=True)
-                        now = timezone.now()
-                        if coupon.valid_from > now or coupon.valid_to < now:
-                            return Response({'error': 'Coupon has expired.'}, status=400)
-                        if coupon.uses_count >= coupon.usage_limit:
-                            return Response({'error': 'Coupon usage limit reached.'}, status=400)
-                        if subtotal < coupon.min_order_value:
-                            return Response(
-                                {'error': f'Minimum order of ₹{coupon.min_order_value} required for this coupon.'},
-                                status=400,
-                            )
-                        if coupon.discount_type == 'percentage':
-                            discount_amount = (subtotal * coupon.value) / 100
-                        else:
-                            discount_amount = min(coupon.value, subtotal)
-                        coupon_valid = True
-                    except Coupon.DoesNotExist:
-                        return Response({'error': 'Invalid coupon code.'}, status=400)
+                # Quote and checkout use the same server-side promotion engine.
+                promotion_quote = quote_promotions(subtotal, coupon_code, user=request.user,
+                    config=config, include_automatic=data.get('promotion_policy_version') == 2)
+                discount_amount = Decimal(promotion_quote['coupon_discount'])
 
                 # ── Step 3: Validate exchange code (read-only — not consumed here)
                 exchange_discount = Decimal('0.00')
@@ -331,12 +312,9 @@ class CheckoutView(APIView):
                 taxable = max(Decimal('0'), subtotal - discount_amount - exchange_discount)
                 tax_amount = (taxable * tax_pct) / 100
 
-                if free_threshold > 0 and subtotal >= free_threshold:
-                    shipping_fee = Decimal('0.00')
-                else:
-                    shipping_fee = shipping_flat
-
-                total_amount = taxable + tax_amount + shipping_fee
+                shipping_fee = Decimal(promotion_quote['shipping_fee'])
+                tax_amount = tax_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                total_amount = (taxable + tax_amount + shipping_fee).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
                 # ── Step 5: Create Order ───────────────────────────────────────
                 order = Order.objects.create(
@@ -359,6 +337,7 @@ class CheckoutView(APIView):
                     tax_amount=tax_amount,
                     total_amount=total_amount,
                     coupon_code=coupon_code,
+                    applied_discounts=promotion_quote['applied_discounts'],
                     exchange_code_used=exchange_code_input,
                     payment_method='Online',
                     payment_status='Pending',
@@ -416,6 +395,16 @@ class CheckoutView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # Fully covered creator orders do not need a fake ₹1 payment.
+        if total_amount == 0:
+            from payments.services import complete_zero_total_order
+            try:
+                complete_zero_total_order(order.id)
+            except ValueError as error:
+                return Response({'error': str(error)}, status=400)
+            return Response({'order_id': order.id, 'payment_required': False, 'amount': 0,
+                             'currency': 'INR', 'applied_discounts': order.applied_discounts}, status=201)
+
         # ── Step 8: Create Razorpay order (OUTSIDE atomic block) ─────────────
         # If this fails, the Order exists but has no razorpay_order_id.
         # Frontend can show a "Retry Payment" option.
@@ -439,6 +428,8 @@ class CheckoutView(APIView):
         return Response(
             {
                 'order_id': order.id,
+                'payment_required': True,
+                'applied_discounts': order.applied_discounts,
                 'razorpay_order_id': rzp_order['id'],
                 'amount': rzp_order['amount'],
                 'currency': rzp_order.get('currency', 'INR'),

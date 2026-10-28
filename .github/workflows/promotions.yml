@@ -1,0 +1,16 @@
+name: Validate promotions
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  promotions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install Django==5.2.13 djangorestframework==3.18.3 djangorestframework-simplejwt==5.5.1 python-dotenv==1.2.4 pillow==13.0.0 razorpay==2.0.1 requests==2.34.2 openpyxl==3.1.5
+      - run: python manage.py makemigrations --check --dry-run --settings=core.promotion_test_settings
+      - run: python manage.py test store --settings=core.promotion_test_settings --noinput
