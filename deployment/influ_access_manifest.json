@@ -1,0 +1,31 @@
+{
+  "release": "influ-exact-email-access-20261028",
+  "reviewed_policy2_release": "677bb23ecd0904bdc016449cca2eae6651da4196",
+  "files": [
+    {
+      "path": "store/models.py",
+      "before_sha256": "01a00fbdd313ba182594ca25e2daebb2d037dba8769eeb60e75461daa9a107b9",
+      "after_sha256": "13f241482c3c7d0355e1d1b7297c38d04f64308725ae80dee7865b2d0226b3e9"
+    },
+    {
+      "path": "store/promotions.py",
+      "before_sha256": "e279e25e191c7b459c594b609f3fb52a2013656d41f89bf459ad19194d3fbd4d",
+      "after_sha256": "e8172d53b52b249d7b2ccb33189ea4e653ef845ae05d49308b242fb30854beec"
+    },
+    {
+      "path": "store/test_promotions.py",
+      "before_sha256": "54437e199c2fdf350eb9a6f8070439522041f6e448ead5ac07ddfa9dbb0fdf98",
+      "after_sha256": "3fd250708ee7d8052e4be87cf76f16e738bdb9d071ce33a990a95487a42606e0"
+    },
+    {
+      "path": "store/test_production_upgrade.py",
+      "before_sha256": "3e985b952c6662c4f76091b8db0b8088a26cb3437f5266cf983099f518f821f3",
+      "after_sha256": "f17969435043e430bdfb302069a384969f61f6aa343b8ab46e0fb8c928bd928b"
+    },
+    {
+      "path": "store/migrations/0012_coupon_allowed_emails_alter_coupon_staff_only.py",
+      "before_sha256": null,
+      "after_sha256": "c8f68fe35928a1eee88e2de00e02eef8d35e3d70e1abe92ed2bcf92731748135"
+    }
+  ]
+}

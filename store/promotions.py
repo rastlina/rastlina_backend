@@ -19,13 +19,25 @@ def money(value):
         raise ValueError('Order value must be a valid amount.')
 
 
+def can_use_private_coupon(coupon, user=None):
+    """An email allowlist takes precedence over staff status, with no staff bypass."""
+    authenticated = (getattr(user, 'is_authenticated', False)
+                     and getattr(user, 'is_active', False))
+    if coupon.code.strip().upper() == 'INFLU' or coupon.allowed_emails:
+        allowed = coupon.allowed_emails
+        if not isinstance(allowed, list) or not allowed or not all(isinstance(email, str) for email in allowed):
+            return False
+        email = str(getattr(user, 'email', '')).strip().casefold()
+        return bool(authenticated and email and email in {value.strip().casefold() for value in allowed})
+    return not coupon.staff_only or bool(authenticated and getattr(user, 'is_staff', False))
+
+
 def eligible_coupons(user=None):
     now = timezone.now()
     coupons = Coupon.objects.filter(active=True, valid_from__lte=now,
                                     valid_to__gte=now, uses_count__lt=F('usage_limit'))
-    if not (getattr(user, 'is_authenticated', False) and getattr(user, 'is_staff', False)):
-        coupons = coupons.filter(staff_only=False).exclude(code__iexact='INFLU')
-    return coupons
+    allowed_ids = [coupon.pk for coupon in coupons if can_use_private_coupon(coupon, user)]
+    return coupons.filter(pk__in=allowed_ids)
 
 
 def check_coupon(code, subtotal, user=None):
@@ -33,9 +45,8 @@ def check_coupon(code, subtotal, user=None):
         coupon = Coupon.objects.get(code__iexact=code.strip())
     except Coupon.DoesNotExist:
         raise ValueError('Invalid promo code.')
-    if coupon.staff_only or coupon.code.upper() == 'INFLU':
-        if not (getattr(user, 'is_authenticated', False) and getattr(user, 'is_staff', False)):
-            raise ValueError('This creator promo code is available only to authorised staff. Sign in with your staff account.')
+    if not can_use_private_coupon(coupon, user):
+        raise ValueError('This private promo code is available only to its authorised accounts. Sign in with an authorised account.')
     if not coupon.is_valid():
         raise ValueError('Promo code has expired, is inactive, or has reached its usage limit.')
     if subtotal < coupon.min_order_value:

@@ -10,7 +10,7 @@ from django.utils import timezone
 class ProductionUpgradeTests(TransactionTestCase):
     def test_existing_shipping_and_video_branches_upgrade_without_data_loss(self):
         old_targets = [('orders', '0007_shiprocket_sync'), ('store', '0010_merge_watchandshop_mp4')]
-        latest_targets = [('orders', '0008_merge_promotions_shipping'), ('store', '0011_merge_promotions_watch_shop')]
+        latest_targets = [('orders', '0008_merge_promotions_shipping'), ('store', '0012_coupon_allowed_emails_alter_coupon_staff_only')]
         executor = MigrationExecutor(connection)
         try:
             executor.migrate([('orders', '0004_alter_returnrequest_options'),
@@ -41,6 +41,7 @@ class ProductionUpgradeTests(TransactionTestCase):
             influ = apps.get_model('store', 'Coupon').objects.get(code='INFLU')
             self.assertEqual((influ.value, influ.uses_count, influ.min_order_value), (Decimal('179'), 3, 0))
             self.assertTrue(influ.staff_only and influ.free_shipping and not influ.auto_apply)
+            self.assertEqual(influ.allowed_emails, [])
             from store.models import SiteConfig
             from store.promotions import quote_promotions
             config = SiteConfig.objects.create(shipping_fee=99, free_shipping_threshold=499, tax_percentage=0)

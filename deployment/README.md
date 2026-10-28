@@ -1,5 +1,9 @@
 # Production-compatible promotion release
 
+For a server where policy 2 is already installed, use the exact-email INFLU
+upgrade described below. The original policy-2 installer is retained for the
+previous pinned archive; do not use it to install this newer source tree.
+
 This release merges the uploaded live server changes with promotion policy 2.
 It preserves Shiprocket integration, merchant notification queues, stock locks,
 bulk product editing, and the 500-character legacy video URL field. It joins the
@@ -62,3 +66,15 @@ python -m unittest discover -s deployment -p 'test_*.py'
 thresholds, manual/private codes, shipping waiver, zero-total orders, duplicate
 payment callbacks/webhooks, stock/coupon idempotency, shipping/notification queues,
 production migration upgrade and safe installer preconditions.
+# Exact-email INFLU access after policy 2 is installed
+
+Use `install_influ_access.py --email <first-account> --email <second-account>`
+from this release archive on the existing VPS. It requires the exact policy-2
+file preimages, reuses the guarded installer's private database/source backups
+and isolated preflight, migrates the `allowed_emails` field, then configures and
+verifies those two addresses before restarting Gunicorn. Emails stay in the
+server database, outside public source. No accounts are created or promoted.
+The explicit list takes priority over staff status; other staff cannot use INFLU.
+Empty or invalid INFLU lists deny everyone. Login is required and access uses the
+authenticated account email, never the delivery email in a checkout form.
+The existing discount value, expiry, usage limits and free-shipping rule remain.
