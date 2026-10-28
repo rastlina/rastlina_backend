@@ -114,25 +114,6 @@ class CheckoutView(APIView):
     POST /api/orders/checkout/
 
     Online payment only — no COD.
-
-    Transaction strategy:
-    ┌─────────────────────────────────────────────────────────────────────┐
-    │  transaction.atomic()                                               │
-    │    for each item:                                                   │
-    │      select_for_update() on variant                                 │
-    │      validate stock                                                 │
-    │    create Order                                                     │
-    │    create OrderItems                                                │
-    │    [coupon/exchange NOT consumed here — done at payment capture]    │
-    └─────────────────────────────────────────────────────────────────────┘
-    After transaction commits:
-      create Razorpay order (network call — outside atomic block)
-      if Razorpay fails: order exists with no razorpay_order_id (recoverable)
-      save razorpay_order_id back to order
-
-    Note: stock is NOT deducted at checkout. It is deducted at payment capture.
-    Only validation happens here. This is fine for typical concurrent load.
-    For high-traffic flash sales, add a reservation/hold mechanism.
     """
     permission_classes = [AllowAny]  # supports both guest and authenticated
 
@@ -148,17 +129,17 @@ class CheckoutView(APIView):
             return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
 
         # ── Shipping address ──────────────────────────────────────────────────
-        first_name = data.get('first_name', '').strip()
-        last_name = data.get('last_name', '').strip()
-        phone = data.get('phone', '').strip()
-        address = data.get('address', '').strip()
-        apartment = data.get('apartment', '').strip()
-        landmark = data.get('landmark', '').strip()
-        city = data.get('city', '').strip()
-        state = data.get('state', '').strip()
-        zip_code = data.get('zip_code', '').strip()
-        country = data.get('country', 'India').strip()
-        guest_email = data.get('email', '').strip()
+        first_name = str(data.get('first_name') or '').strip()
+        last_name = str(data.get('last_name') or '').strip()
+        phone = str(data.get('phone') or '').strip()
+        address = str(data.get('address') or '').strip()
+        apartment = str(data.get('apartment') or '').strip()
+        landmark = str(data.get('landmark') or '').strip()
+        city = str(data.get('city') or '').strip()
+        state = str(data.get('state') or '').strip()
+        zip_code = str(data.get('zip_code') or '').strip()
+        country = str(data.get('country') or 'India').strip()
+        guest_email = str(data.get('email') or '').strip()
 
         if not all([address, city, state, zip_code]):
             return Response(
@@ -199,9 +180,13 @@ class CheckoutView(APIView):
 
                     if variant_id:
                         try:
+                            # POSTGRES COMPATIBILITY FIX: Lock ONLY the ProductVariant row.
+                            # Using select_for_update() with select_related on fields that can be Null
+                            # generates a SQL LEFT OUTER JOIN. Postgres throws a runtime error if you try
+                            # to lock rows across a nullable outer join without defining 'of'.
                             variant = (
                                 ProductVariant.objects
-                                .select_for_update()
+                                .select_for_update(of=('self',))
                                 .select_related('product', 'size', 'color')
                                 .get(id=variant_id)
                             )
@@ -212,14 +197,11 @@ class CheckoutView(APIView):
                             )
 
                         product = variant.product
-
-                        # Price = base + override (price_override is the delta)
                         server_price = (
                             Decimal(str(product.price)) +
                             Decimal(str(variant.price_override or 0))
                         )
 
-                        # Variant label: "Medium / Sage Green"
                         size_name = variant.size.name if variant.size else ''
                         color_name = variant.color.name if variant.color else ''
                         variant_label = ' / '.join(filter(None, [size_name, color_name]))
@@ -236,9 +218,13 @@ class CheckoutView(APIView):
                                 status=status.HTTP_400_BAD_REQUEST,
                             )
                     else:
-                        # Product without variant
                         try:
-                            product = Product.objects.get(id=product_id, is_active=True)
+                            # POSTGRES COMPATIBILITY FIX: Lock raw product row explicitly when no variants exist
+                            product = (
+                                Product.objects
+                                .select_for_update(of=('self',))
+                                .get(id=product_id, is_active=True)
+                            )
                         except Product.DoesNotExist:
                             return Response(
                                 {'error': f'Product {product_id} not found.'},
@@ -250,7 +236,6 @@ class CheckoutView(APIView):
 
                     subtotal += server_price * quantity
 
-                    # Best image for this variant's color
                     color_id = variant.color_id if variant and variant.color else None
                     if color_id:
                         primary_img = (
@@ -287,15 +272,11 @@ class CheckoutView(APIView):
                     config=config, include_automatic=data.get('promotion_policy_version') == 2)
                 discount_amount = Decimal(promotion_quote['coupon_discount'])
 
-                # ── Step 3: Validate exchange code (read-only — not consumed here)
+                # ── Step 3: Validate exchange code (read-only) ────────────────
                 exchange_discount = Decimal('0.00')
-                exchange_valid = False
-
                 if exchange_code_input:
                     try:
-                        exchange_obj = ExchangeCode.objects.get(
-                            code=exchange_code_input, is_used=False
-                        )
+                        exchange_obj = ExchangeCode.objects.get(code=exchange_code_input, is_used=False)
                         if exchange_obj.expires_at and exchange_obj.expires_at < timezone.now():
                             return Response({'error': 'Exchange code has expired.'}, status=400)
                         if subtotal < exchange_obj.original_order_value:
@@ -304,7 +285,6 @@ class CheckoutView(APIView):
                                 status=400,
                             )
                         exchange_discount = exchange_obj.original_order_value
-                        exchange_valid = True
                     except ExchangeCode.DoesNotExist:
                         return Response({'error': 'Invalid or already used exchange code.'}, status=400)
 
@@ -343,7 +323,6 @@ class CheckoutView(APIView):
                     payment_status='Pending',
                     order_status='Pending',
                     accepted_return_policy=accepted_return_policy,
-                    # Idempotency flags start False — set at payment capture
                     stock_deducted=False,
                     stock_restored=False,
                     coupon_applied=False,
@@ -366,9 +345,7 @@ class CheckoutView(APIView):
                 # ── Step 7: Optionally save address for logged-in users ────────
                 if save_as_default and request.user and request.user.is_authenticated:
                     from accounts.models import SavedAddress
-                    SavedAddress.objects.filter(
-                        user=request.user, is_default=True
-                    ).update(is_default=False)
+                    SavedAddress.objects.filter(user=request.user, is_default=True).update(is_default=False)
                     SavedAddress.objects.create(
                         user=request.user,
                         label='Home',
@@ -406,12 +383,11 @@ class CheckoutView(APIView):
                              'currency': 'INR', 'applied_discounts': order.applied_discounts}, status=201)
 
         # ── Step 8: Create Razorpay order (OUTSIDE atomic block) ─────────────
-        # If this fails, the Order exists but has no razorpay_order_id.
-        # Frontend can show a "Retry Payment" option.
         try:
             from payments.razorpay_client import create_order as razorpay_create_order
             rzp_order = razorpay_create_order(total_amount)
             order.razorpay_order_id = rzp_order['id']
+            # Safely save with update_fields to preserve transaction states
             order.save(update_fields=['razorpay_order_id'])
         except Exception as rzp_exc:
             logger.error(
@@ -420,7 +396,7 @@ class CheckoutView(APIView):
             return Response(
                 {
                     'error': 'Payment gateway unavailable. Please try again.',
-                    'order_id': order.id,  # include so frontend can retry
+                    'order_id': order.id,
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -445,10 +421,6 @@ class CheckoutView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CancelOrderView(APIView):
-    """
-    POST /api/orders/<pk>/cancel/
-    Delegates to orders.services.cancel_order → payments.services.cancel_order_with_refund.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
@@ -469,11 +441,6 @@ class CancelOrderView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ReturnRequestCreateView(APIView):
-    """
-    POST /api/orders/<order_id>/exchange/
-    Submit an exchange request for a defective product.
-    No physical return required. Admin reviews, approves, exchange code generated.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, order_id):
@@ -482,32 +449,16 @@ class ReturnRequestCreateView(APIView):
         except Order.DoesNotExist:
             return Response({'error': 'Order not found.'}, status=404)
 
-        # Eligibility checks
         if order.order_status != 'Delivered':
-            return Response(
-                {'error': 'Only delivered orders can have exchange requests.'},
-                status=400,
-            )
+            return Response({'error': 'Only delivered orders can have exchange requests.'}, status=400)
         if not order.accepted_return_policy:
-            return Response(
-                {'error': 'Return policy was not accepted at checkout.'},
-                status=400,
-            )
+            return Response({'error': 'Return policy was not accepted at checkout.'}, status=400)
         if not order.delivered_at:
-            return Response(
-                {'error': 'Delivery date not confirmed yet. Please contact support.'},
-                status=400,
-            )
+            return Response({'error': 'Delivery date not confirmed yet. Please contact support.'}, status=400)
         if (timezone.now() - order.delivered_at).days > 15:
-            return Response(
-                {'error': '15-day exchange window has expired.'},
-                status=400,
-            )
+            return Response({'error': '15-day exchange window has expired.'}, status=400)
         if order.return_requests.filter(status__in=('Pending', 'Approved')).exists():
-            return Response(
-                {'error': 'An exchange request is already pending or approved.'},
-                status=400,
-            )
+            return Response({'error': 'An exchange request is already pending or approved.'}, status=400)
 
         serializer = ReturnRequestSerializer(data=request.data)
         if serializer.is_valid():
@@ -521,11 +472,6 @@ class ReturnRequestCreateView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class OrderReturnRequestCreateView(APIView):
-    """
-    POST /api/orders/<order_id>/return-product/
-    Submit a physical return + refund request.
-    Admin reviews, approves, and processes refund manually.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, order_id):
@@ -535,21 +481,13 @@ class OrderReturnRequestCreateView(APIView):
             return Response({'error': 'Order not found.'}, status=404)
 
         if order.order_status != 'Delivered':
-            return Response(
-                {'error': 'Only delivered orders can be returned.'},
-                status=400,
-            )
+            return Response({'error': 'Only delivered orders can be returned.'}, status=400)
         if not order.delivered_at:
             return Response({'error': 'Delivery date not confirmed.'}, status=400)
         if (timezone.now() - order.delivered_at).days > 15:
             return Response({'error': '15-day return window has expired.'}, status=400)
-        if order.order_return_requests.filter(
-            status__in=('Pending', 'Approved', 'Completed')
-        ).exists():
-            return Response(
-                {'error': 'A return request is already active for this order.'},
-                status=400,
-            )
+        if order.order_return_requests.filter(status__in=('Pending', 'Approved', 'Completed')).exists():
+            return Response({'error': 'A return request is already active for this order.'}, status=400)
 
         serializer = OrderReturnRequestSerializer(data=request.data)
         if serializer.is_valid():
@@ -563,11 +501,6 @@ class OrderReturnRequestCreateView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ValidateExchangeCodeView(APIView):
-    """
-    POST /api/orders/validate-exchange-code/
-    Body: { "code": "RST-XXXXXXXX" }
-    Returns validity, original_order_value, expiry.
-    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -587,10 +520,7 @@ class ValidateExchangeCodeView(APIView):
                 'message': f'Code valid! New order must be at least ₹{exchange.original_order_value}.',
             })
         except ExchangeCode.DoesNotExist:
-            return Response(
-                {'valid': False, 'error': 'Invalid or already used exchange code.'},
-                status=400,
-            )
+            return Response({'valid': False, 'error': 'Invalid or already used exchange code.'}, status=400)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -598,14 +528,6 @@ class ValidateExchangeCodeView(APIView):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GuestOrderTrackView(APIView):
-    """
-    POST /api/orders/track/
-    Body: { "order_id": 123, "phone": "9876543210" }
-     OR   { "order_id": 123, "email": "user@example.com" }
-
-    Returns order status + items for guest OR authenticated users.
-    Requires order_id + phone OR email to prevent enumeration.
-    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -616,10 +538,7 @@ class GuestOrderTrackView(APIView):
         if not order_id:
             return Response({'error': 'order_id is required.'}, status=400)
         if not phone and not email:
-            return Response(
-                {'error': 'Please provide phone or email to track your order.'},
-                status=400,
-            )
+            return Response({'error': 'Please provide phone or email to track your order.'}, status=400)
 
         try:
             qs = Order.objects.prefetch_related('items')
@@ -627,8 +546,12 @@ class GuestOrderTrackView(APIView):
                 order = qs.get(id=order_id, phone=phone)
             else:
                 order = qs.get(id=order_id, email__iexact=email)
+            
+            # PRODUCTION SECURITY GUARD: Exclude unsubmitted draft/pending status checkouts from enumeration
+            if order.order_status == 'Pending':
+                raise Order.DoesNotExist
+
         except Order.DoesNotExist:
-            # Generic message — don't reveal whether order_id exists
             return Response(
                 {'error': 'No order found with the provided details. Please check and try again.'},
                 status=404,

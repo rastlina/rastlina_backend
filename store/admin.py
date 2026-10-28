@@ -14,6 +14,7 @@ from django.http import Http404, HttpResponseRedirect, HttpResponseNotAllowed
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from .product_duplication import duplicate_product
+from .bulk_product_admin import bulk_edit_selected_products
 from django.utils.html import format_html
 from django.core.exceptions import ValidationError
 from django import forms
@@ -237,7 +238,7 @@ class ProductAdmin(admin.ModelAdmin):
     filter_horizontal = ('space_tags',)
     inlines = [ProductImageInline, ProductVariantInline, DeliveryEstimateInline]
     save_on_top = True
-    actions = ("duplicate_selected_products",)
+    actions = ("duplicate_selected_products", bulk_edit_selected_products)
 
     @admin.display(description="Duplicate")
     def duplicate_button(self, obj):

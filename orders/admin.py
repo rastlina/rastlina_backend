@@ -1,79 +1,41 @@
 """orders/admin.py"""
 
 import csv
+import tempfile
+import requests
 
 from django.contrib import admin
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.html import format_html
 from django.contrib import messages
-from .services import approve_return_request
-from .services import approve_exchange_request
+from .services import approve_return_request, approve_exchange_request
 from .models import ExchangeCode, Order, OrderItem, OrderReturnRequest, ReturnRequest
-import tempfile
-import requests
+from .shiprocket_service import create_shipment, cancel_shipment, get_shipping_label
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.drawing.image import Image as XLImage
 
+
 def export_to_excel(modeladmin, request, queryset):
     wb = Workbook()
     ws = wb.active
     ws.title = "Orders"
-
     headers = [
-        'Order ID',
-        'Date',
-        'Customer',
-        'Phone',
-        'Email',
-        'Payment Status',
-        'Order Status',
-        'Payment Method',
-        'Address',
-        'City',
-        'State',
-        'Pincode',
-        'SKU',
-        'Product',
-        'Variant',
-        'Quantity',
-        'Unit Price',
-        'Line Total',
-
-        'Image',
+        'Order ID', 'Date', 'Customer', 'Phone', 'Email',
+        'Payment Status', 'Order Status', 'Payment Method',
+        'Address', 'City', 'State', 'Pincode',
+        'SKU', 'Product', 'Variant', 'Quantity', 'Unit Price', 'Line Total', 'Image',
     ]
-
     ws.append(headers)
-
-    # Header styling
     for cell in ws[1]:
         cell.font = Font(bold=True)
-
     row_num = 2
-
     for order in queryset.prefetch_related('items'):
-
         for item in order.items.all():
             sku = getattr(item, 'sku', '') or getattr(item.product, 'sku', '—')
-
-            product_name = item.product_name
-
-            variant = item.variant_label or '—'
-
-            quantity = item.quantity
-
-            unit_price = float(item.price)
-
-            line_total = quantity * unit_price
-
-            address = " ".join(filter(None, [
-                order.shipping_address,
-                order.apartment,
-                order.landmark,
-            ]))
-
+            address = " ".join(filter(None, [order.shipping_address, order.apartment, order.landmark]))
             ws.cell(row=row_num, column=1, value=order.id)
             ws.cell(row=row_num, column=2, value=timezone.localtime(order.created_at).strftime('%d-%m-%Y %H:%M'))
             ws.cell(row=row_num, column=3, value=f"{order.first_name} {order.last_name}")
@@ -82,79 +44,89 @@ def export_to_excel(modeladmin, request, queryset):
             ws.cell(row=row_num, column=6, value=order.payment_status)
             ws.cell(row=row_num, column=7, value=order.order_status)
             ws.cell(row=row_num, column=8, value=order.payment_method)
-
             ws.cell(row=row_num, column=9, value=address)
             ws.cell(row=row_num, column=10, value=order.city)
             ws.cell(row=row_num, column=11, value=order.state)
             ws.cell(row=row_num, column=12, value=order.zip_code)
-
             ws.cell(row=row_num, column=13, value=sku)
-            ws.cell(row=row_num, column=14, value=product_name)
-            ws.cell(row=row_num, column=15, value=variant)
-            ws.cell(row=row_num, column=16, value=quantity)
-            ws.cell(row=row_num, column=17, value=unit_price)
-            ws.cell(row=row_num, column=18, value=line_total)
-            # Add image
+            ws.cell(row=row_num, column=14, value=item.product_name)
+            ws.cell(row=row_num, column=15, value=item.variant_label or '—')
+            ws.cell(row=row_num, column=16, value=item.quantity)
+            ws.cell(row=row_num, column=17, value=float(item.price))
+            ws.cell(row=row_num, column=18, value=item.quantity * float(item.price))
             if item.image_url:
                 try:
                     response = requests.get(item.image_url, timeout=10)
-
                     if response.status_code == 200:
                         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
                         tmp.write(response.content)
                         tmp.close()
-
                         img = XLImage(tmp.name)
                         img.width = 60
                         img.height = 60
-
                         ws.add_image(img, f'S{row_num}')
-
                         ws.row_dimensions[row_num].height = 50
-
                 except Exception:
                     pass
-
             row_num += 1
-
-    # Column widths
     widths = {
-        'A': 12,
-        'B': 20,
-        'C': 25,
-        'D': 18,
-        'E': 28,
-        'F': 18,
-        'G': 18,
-        'H': 18,
-        'I': 40,
-        'J': 18,
-        'K': 18,
-        'L': 14,
-        'M': 18,   # SKU
-        'N': 35,   # Product
-        'O': 25,   # Variant
-        'P': 10,   # Qty
-        'Q': 14,   # Unit Price
-        'R': 14,   # Line Total
-        'S': 18,   # Image
+        'A': 12, 'B': 20, 'C': 25, 'D': 18, 'E': 28,
+        'F': 18, 'G': 18, 'H': 18, 'I': 40, 'J': 18,
+        'K': 18, 'L': 14, 'M': 18, 'N': 35, 'O': 25,
+        'P': 10, 'Q': 14, 'R': 14, 'S': 18,
     }
-
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
-
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-
     response['Content-Disposition'] = 'attachment; filename=orders.xlsx'
-
     wb.save(response)
-
     return response
 
-
 export_to_excel.short_description = "Export selected orders to Excel"
+
+
+def create_shiprocket_shipment(modeladmin, request, queryset):
+    for order in queryset:
+        if not modeladmin.has_change_permission(request, order):
+            continue
+        result = create_shipment(order)
+        if result['success']:
+            message = 'Queued for Shiprocket New Orders.' if result.get('queued') else 'Already synced to Shiprocket.'
+            modeladmin.message_user(request, f'Order #{order.id}: {message}', level=messages.SUCCESS)
+        else:
+            modeladmin.message_user(request, f"Order #{order.id}: {result.get('error')}", level=messages.WARNING)
+
+create_shiprocket_shipment.short_description = 'Sync selected paid orders to Shiprocket (New Orders)'
+create_shiprocket_shipment.allowed_permissions = ['change']
+
+
+def cancel_shiprocket_shipment(modeladmin, request, queryset):
+    for order in queryset:
+        result = cancel_shipment(order)
+        if result["success"]:
+            modeladmin.message_user(request, f"Order #{order.id} cancelled on Shiprocket.", level=messages.SUCCESS)
+        else:
+            modeladmin.message_user(request, f"Order #{order.id} cancel failed: {result.get('error')}", level=messages.ERROR)
+
+cancel_shiprocket_shipment.short_description = "❌ Cancel Shiprocket shipment"
+
+
+def fetch_shipping_label(modeladmin, request, queryset):
+    for order in queryset:
+        sid = getattr(order, "shiprocket_shipment_id", None)
+        if not sid:
+            modeladmin.message_user(request, f"Order #{order.id} has no Shiprocket shipment yet.", level=messages.WARNING)
+            continue
+        result = get_shipping_label(int(sid))
+        if result["success"]:
+            modeladmin.message_user(request, f"Order #{order.id} label: {result.get('label_url')}", level=messages.SUCCESS)
+        else:
+            modeladmin.message_user(request, f"Order #{order.id} label failed: {result.get('error')}", level=messages.ERROR)
+
+fetch_shipping_label.short_description = "🏷️ Fetch Shiprocket label URL"
+
 
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
@@ -168,19 +140,41 @@ class OrderItemInline(admin.TabularInline):
     image_preview.short_description = 'Image'
 
 
+from .shipping_models import ShiprocketSync
+
+
+class ShiprocketSyncInline(admin.StackedInline):
+    model = ShiprocketSync
+    extra = 0
+    can_delete = False
+    readonly_fields = ['status', 'plant_count', 'attempts', 'last_error', 'next_attempt_at', 'synced_at']
+    fields = readonly_fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    # Removed: email, payment_method; added phone + short_address
     list_display = [
         'id', 'full_name', 'phone', 'is_guest', 'total_amount',
-        'payment_status', 'order_status', 'short_address', 'created_at',
+        'payment_status', 'order_status', 'short_address', 'created_at', 'shipping_sync_status',
     ]
     list_editable = ['order_status', 'payment_status']
     list_filter = ['payment_status', 'order_status', 'created_at']
     search_fields = ['id', 'first_name', 'last_name', 'email', 'phone', 'razorpay_order_id']
-    readonly_fields = ['created_at', 'updated_at', 'razorpay_order_id', 'razorpay_payment_id']
-    actions = [export_to_excel]
-    inlines = [OrderItemInline]
+    readonly_fields = [
+        'created_at', 'updated_at', 'razorpay_order_id', 'razorpay_payment_id',
+    ]
+    actions = [export_to_excel, create_shiprocket_shipment, cancel_shiprocket_shipment, fetch_shipping_label]
+    inlines = [OrderItemInline, ShiprocketSyncInline]
+    @admin.display(description='Shiprocket sync')
+    def shipping_sync_status(self, obj):
+        row = ShiprocketSync.objects.filter(order_id=obj.pk).first()
+        if row:
+            return row.status
+        return 'Synced (existing)' if obj.shiprocket_order_id else 'Not queued'
+
     list_per_page = 25
     fieldsets = (
         ('Customer', {
@@ -231,38 +225,24 @@ class OrderAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-# ─── Exchange Request admin ───────────────────────────────────────────────────
-
 def approve_exchange_and_generate_code(modeladmin, request, queryset):
     success_count = 0
-
     for req in queryset:
         result = approve_exchange_request(req.id)
-
         if result.get('success'):
             success_count += 1
         else:
-            modeladmin.message_user(
-                request,
-                f"Exchange #{req.id} failed: {result.get('error')}",
-                level=messages.ERROR,
-            )
-
+            modeladmin.message_user(request, f"Exchange #{req.id} failed: {result.get('error')}", level=messages.ERROR)
     if success_count:
-        modeladmin.message_user(
-            request,
-            f"{success_count} exchange request(s) approved successfully.",
-            level=messages.SUCCESS,
-        )
+        modeladmin.message_user(request, f"{success_count} exchange request(s) approved successfully.", level=messages.SUCCESS)
+
+approve_exchange_and_generate_code.short_description = 'Approve & generate exchange codes'
 
 
-approve_exchange_and_generate_code.short_description = (
-    'Approve & generate exchange codes'
-)
 def reject_exchange(modeladmin, request, queryset):
     queryset.filter(status='Pending').update(
         status='Rejected',
-        admin_notes='Your exchange request has been reviewed and rejected. Contact support if you have questions.',
+        admin_notes='Your exchange request has been reviewed and rejected.',
     )
 
 reject_exchange.short_description = 'Reject selected exchange requests'
@@ -270,9 +250,7 @@ reject_exchange.short_description = 'Reject selected exchange requests'
 
 @admin.register(ReturnRequest)
 class ExchangeRequestAdmin(admin.ModelAdmin):
-    list_display = [
-        'id', 'get_order_id', 'get_customer', 'status', 'has_video', 'created_at',
-    ]
+    list_display = ['id', 'get_order_id', 'get_customer', 'status', 'has_video', 'created_at']
     list_filter = ['status']
     search_fields = ['order__id', 'order__email', 'order__user__email']
     readonly_fields = ['order', 'user', 'guest_email', 'created_at', 'updated_at', 'exchange_code']
@@ -295,46 +273,24 @@ class ExchangeRequestAdmin(admin.ModelAdmin):
     has_video.short_description = 'Video?'
 
 
-# ─── Return Request admin ─────────────────────────────────────────────────────
-
 def approve_return(modeladmin, request, queryset):
-    """
-    Approve physical return requests AND restore stock.
-    """
-
     success_count = 0
-
     for req in queryset:
-        result = approve_return_request(
-            req.id,
-            restore_stock=True,   # IMPORTANT
-        )
-
+        result = approve_return_request(req.id)
         if result.get('success'):
             success_count += 1
         else:
-            modeladmin.message_user(
-                request,
-                f"Return #{req.id} failed: {result.get('error')}",
-                level=messages.ERROR,
-            )
-
+            modeladmin.message_user(request, f"Return #{req.id} failed: {result.get('error')}", level=messages.ERROR)
     if success_count:
-        modeladmin.message_user(
-            request,
-            f"{success_count} return request(s) approved successfully.",
-            level=messages.SUCCESS,
-        )
+        modeladmin.message_user(request, f"{success_count} return request(s) approved successfully.", level=messages.SUCCESS)
 
+approve_return.short_description = 'Approve selected return requests & restore stock'
 
-approve_return.short_description = (
-    'Approve selected return requests & restore stock'
-)
 
 def reject_return(modeladmin, request, queryset):
     queryset.filter(status='Pending').update(
         status='Rejected',
-        admin_notes='Your return request has been reviewed and rejected. Contact support if needed.',
+        admin_notes='Your return request has been reviewed and rejected.',
     )
 
 reject_return.short_description = 'Reject selected return requests'
@@ -342,10 +298,7 @@ reject_return.short_description = 'Reject selected return requests'
 
 @admin.register(OrderReturnRequest)
 class OrderReturnRequestAdmin(admin.ModelAdmin):
-    list_display = [
-        'id', 'get_order_id', 'get_customer', 'status',
-        'refund_initiated', 'has_video', 'created_at',
-    ]
+    list_display = ['id', 'get_order_id', 'get_customer', 'status', 'refund_initiated', 'has_video', 'created_at']
     list_filter = ['status', 'refund_initiated']
     search_fields = ['order__id', 'order__email', 'order__user__email']
     readonly_fields = ['order', 'user', 'guest_email', 'created_at', 'updated_at']
@@ -374,13 +327,9 @@ class OrderReturnRequestAdmin(admin.ModelAdmin):
     has_video.short_description = 'Video?'
 
 
-# ─── Exchange Code admin ──────────────────────────────────────────────────────
-
 @admin.register(ExchangeCode)
 class ExchangeCodeAdmin(admin.ModelAdmin):
-    list_display = [
-        'code', 'get_order', 'original_order_value', 'is_used', 'expires_at', 'created_at',
-    ]
+    list_display = ['code', 'get_order', 'original_order_value', 'is_used', 'expires_at', 'created_at']
     list_filter = ['is_used']
     search_fields = ['code', 'order__id']
     readonly_fields = ['code', 'created_at', 'used_at']

@@ -1,0 +1,106 @@
+{
+  "release": "rastlina-promotions-20261028",
+  "reviewed_server_head": "5c9c7c0",
+  "files": [
+    {
+      "path": "core/test_settings.py",
+      "before_sha256": null,
+      "after_sha256": "81949f94508286854562a48025cbe6c0aaeb0c2a19a063df0c414621edc6120b"
+    },
+    {
+      "path": "core/promotion_test_settings.py",
+      "before_sha256": null,
+      "after_sha256": "4d843e1d74af695771e134ddc6ad651f0cf3b34e41e98b91c720648598d6dc9f"
+    },
+    {
+      "path": "core/promotion_test_urls.py",
+      "before_sha256": null,
+      "after_sha256": "6339eef556736161d6ad6a6a172a824782deda9d8131160f09c3f6037cc2a405"
+    },
+    {
+      "path": "orders/models.py",
+      "before_sha256": "bdeed405bef05a755654132733272b12c1a9a53ff27fccaef9e29f83af090c49",
+      "after_sha256": "760989de99fa3113644b8bc4aff682a641097162ff685855378c5fb9a1946b3e"
+    },
+    {
+      "path": "orders/serializers.py",
+      "before_sha256": "83f6cefd27b1f70823ce99a150918df6f8ca8c26f73f58b6ccf2a928f739a94b",
+      "after_sha256": "c1a0e2f553701bd8dfbf3377c48806ab8629296113c18277b59cf514821e65b2"
+    },
+    {
+      "path": "orders/views.py",
+      "before_sha256": "116c37f6fa1f8e563febd529b165fff0eaa8027aa17d27c2a24bb1dc07e0d131",
+      "after_sha256": "ca3f2662103e356c5be20a167547876c8e08582a44b94a4eaea14f0799e317f7"
+    },
+    {
+      "path": "orders/migrations/0005_order_applied_discounts.py",
+      "before_sha256": null,
+      "after_sha256": "b76762a32cdf3e700de306a8f93ea15c7f57ffd9ae64105c9f74f4ba7b991116"
+    },
+    {
+      "path": "orders/migrations/0008_merge_promotions_shipping.py",
+      "before_sha256": null,
+      "after_sha256": "f9c502df5b693f30fcbe879edf8a48325ffa7c10c1a68232d3d3295b99b4d4b5"
+    },
+    {
+      "path": "payments/services.py",
+      "before_sha256": "b2543300dd2da6c3e4720cdbfc9878c3863b1e241b1baaa05560ca0d33b59a02",
+      "after_sha256": "faca7986856efabe221e200316ee5f1a0ecc694868c29f1129b0b812dc424ab2"
+    },
+    {
+      "path": "store/admin.py",
+      "before_sha256": "26dfa4e5cea46baacb62240f5f39dca9aa2e22b3f14126eb604cc57a6e84bdd5",
+      "after_sha256": "116f58c369987b69ba345c47bdb5aa6573d83b8ad8eb3c51b61e546b7f650857"
+    },
+    {
+      "path": "store/models.py",
+      "before_sha256": "274a7b727cb82f261ea72d98e7b2b65a4d9ace0d1c7d1ef5752909693ec12691",
+      "after_sha256": "01a00fbdd313ba182594ca25e2daebb2d037dba8769eeb60e75461daa9a107b9"
+    },
+    {
+      "path": "store/serializers.py",
+      "before_sha256": "6bed1c7cb5fe6fb70af63d1330c42bedfa77a5538236c5c0e7a9a41038ce683c",
+      "after_sha256": "413e4c1430b2215d639737a7e745fc0aff6bf2dda8aae755e431951611adb29d"
+    },
+    {
+      "path": "store/views.py",
+      "before_sha256": "61247a4b1ef1664a27431d463d8ec78910a50570614b0f0f67243279c2869545",
+      "after_sha256": "66957c1d9a3ff8a98a828bb43f7279f7f0916ebdda8dc437316cdc67508764c7"
+    },
+    {
+      "path": "store/urls.py",
+      "before_sha256": "a38cadea54189e5783a5f45997d253284762ec7e989b5e72d975666bd61081eb",
+      "after_sha256": "0289a0f632c09f759988db6e1822e2fbc6874cb245c7fec01c11087c53b3db29"
+    },
+    {
+      "path": "store/promotions.py",
+      "before_sha256": null,
+      "after_sha256": "e279e25e191c7b459c594b609f3fb52a2013656d41f89bf459ad19194d3fbd4d"
+    },
+    {
+      "path": "store/migrations/0010_coupon_promotion_policy.py",
+      "before_sha256": null,
+      "after_sha256": "9ada6d006f4304628e170fe823e4db6fd8bbb62bf2d83b2afa942f398c1d7229"
+    },
+    {
+      "path": "store/migrations/0011_merge_promotions_watch_shop.py",
+      "before_sha256": null,
+      "after_sha256": "7a3fdc30fe2f93b39b1c6e5dee15fe30658098d4929b3847b83e1903582eff87"
+    },
+    {
+      "path": "store/test_promotions.py",
+      "before_sha256": null,
+      "after_sha256": "54437e199c2fdf350eb9a6f8070439522041f6e448ead5ac07ddfa9dbb0fdf98"
+    },
+    {
+      "path": "store/test_catalogue_performance.py",
+      "before_sha256": null,
+      "after_sha256": "b2eb2f2d6eb4b267081ff05ce070654c8a38ecc8482388f9577960421c30352f"
+    },
+    {
+      "path": "store/test_production_upgrade.py",
+      "before_sha256": null,
+      "after_sha256": "3e985b952c6662c4f76091b8db0b8088a26cb3437f5266cf983099f518f821f3"
+    }
+  ]
+}

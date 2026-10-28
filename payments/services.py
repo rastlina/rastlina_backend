@@ -1,3 +1,4 @@
+
 """
 payments/services.py
 Rastlina — Payment capture, cancellation, and refund services.
@@ -9,29 +10,13 @@ ARCHITECTURE CHANGE vs previous version:
     from orders.stock import deduct_stock_for_order, restore_stock_for_order
 
 WHY:
-  Having two separate implementations (_deduct_stock here and
-  deduct_stock_for_order in orders/services.py) caused:
-    - orders/services.py only handled variant stock (not bare product stock)
-    - The two functions could silently diverge over time
-    - It was impossible to know which function a given call path used
-
   There is now exactly ONE implementation for each operation.
 
 IDEMPOTENCY STRATEGY:
-  stock_deducted  — written in the same atomic block as the deduction.
-                    Protects against double-deduction if the webhook fires
-                    after the client callback already captured payment.
-  stock_restored  — written in the same atomic block as the restoration.
-                    Protects against double-restoration on concurrent
-                    cancel calls or if approve + cancel race each other.
-  coupon_applied  — same pattern; incremented once at capture, not checkout.
+  stock_deducted    — written in the same atomic block as the deduction.
+  stock_restored    — written in the same atomic block as the restoration.
+  coupon_applied    — same pattern; incremented once at capture, not checkout.
   exchange_consumed — same pattern.
-
-NOTE ON WEBHOOKS:
-  The webhook endpoint exists in the codebase but is not actively used in
-  production (no RAZORPAY_WEBHOOK_SECRET configured). All payment capture
-  flows go through capture_payment_from_client(). The webhook handler is
-  kept for future use and is fully idempotent.
 """
 
 import logging
@@ -161,15 +146,6 @@ def capture_payment_from_client(
 ) -> dict:
     """
     Called by VerifyPaymentView right after the Razorpay modal closes.
-
-    Lifecycle:
-      1. Find order by razorpay_order_id.
-      2. Verify Razorpay signature (before any write).
-      3. Inside atomic+lock: if already Paid → return early (idempotent).
-      4. Set order to Processing, deduct stock (once), burn coupon/exchange (once).
-      5. Log.
-
-    Stock deduction uses deduct_stock_for_order from orders/stock.py.
     """
     # ── Step 1: find order ────────────────────────────────────────────────────
     try:
@@ -188,9 +164,16 @@ def capture_payment_from_client(
         razorpay_order_id, razorpay_payment_id, razorpay_signature,
     )
     if not is_valid:
-        if order.payment_status == "Pending":
-            order.payment_status = "Failed"
-            order.save(update_fields=["payment_status"])
+        # FIXED: Wrap database status modification securely inside atomic lock protection
+        try:
+            with transaction.atomic():
+                order = Order.objects.select_for_update().get(id=order.id)
+                if order.payment_status == "Pending":
+                    order.payment_status = "Failed"
+                    order.save(update_fields=["payment_status"])
+        except Exception as lock_exc:
+            logger.error("Failed to mark order status as Failed due to database lock error: %s", lock_exc)
+
         _log(
             event="signature.failed", source="client",
             order=order, razorpay_payment_id=razorpay_payment_id,
@@ -199,53 +182,60 @@ def capture_payment_from_client(
         return {"success": False, "error": "Payment signature verification failed"}
 
     # ── Step 3 + 4: atomic lock → write ──────────────────────────────────────
-    with transaction.atomic():
-        order = Order.objects.select_for_update().get(id=order.id)
+    try:
+        with transaction.atomic():
+            order = Order.objects.select_for_update().get(id=order.id)
 
-        # Idempotency: exact same payment already recorded
-        if order.payment_status == "Paid" and order.razorpay_payment_id == razorpay_payment_id:
-            return {
-                "success": True,
-                "message": "Payment already processed",
-                "order_id": order.id,
-            }
+            # Idempotency: exact same payment already recorded
+            if order.payment_status == "Paid" and order.razorpay_payment_id == razorpay_payment_id:
+                return {
+                    "success": True,
+                    "message": "Payment already processed",
+                    "order_id": order.id,
+                }
 
-        # Reject a different payment_id for an already-paid order
-        if order.payment_status == "Paid":
-            return {
-                "success": False,
-                "error": "Order already paid with a different payment.",
-            }
+            # Reject a different payment_id for an already-paid order
+            if order.payment_status == "Paid":
+                return {
+                    "success": False,
+                    "error": "Order already paid with a different payment.",
+                }
 
-        order.payment_status = "Paid"
-        order.order_status = "Processing"
-        order.razorpay_payment_id = razorpay_payment_id
+            order.payment_status = "Paid"
+            order.order_status = "Processing"
+            order.razorpay_payment_id = razorpay_payment_id
 
-        # ── Stock deduction (idempotent via stock_deducted flag) ──────────────
-        if not order.stock_deducted:
-            deduct_stock_for_order(order)   # raises on inconsistency → rolls back
-            order.stock_deducted = True
+            # ── Stock deduction (idempotent via stock_deducted flag) ──────────────
+            if not order.stock_deducted:
+                deduct_stock_for_order(order)   # raises on inconsistency → rolls back
+                order.stock_deducted = True
 
-        # ── Coupon + exchange consumption ─────────────────────────────────────
-        _consume_coupon_and_exchange(order)
+            # ── Coupon + exchange consumption ─────────────────────────────────────
+            _consume_coupon_and_exchange(order)
 
-        order.save(update_fields=[
-            "payment_status", "order_status", "razorpay_payment_id",
-            "stock_deducted", "coupon_applied", "exchange_consumed",
-        ])
+            order.save(update_fields=[
+                "payment_status", "order_status", "razorpay_payment_id",
+                "stock_deducted", "coupon_applied", "exchange_consumed",
+            ])
 
-    # ── Step 5: log AFTER transaction (non-blocking, best-effort) ────────────
-    _log(
-        event="payment.captured", source="client",
-        order=order, razorpay_payment_id=razorpay_payment_id,
-        amount_paise=int(order.total_amount * 100),
-    )
+        # ── Step 5: log AFTER transaction commits cleanly ────────────────────
+        # FIXED: Converted Decimal calculation safely to integer to prevent 500 crashes
+        amount_paise = int(Decimal(str(order.total_amount)) * 100)
+        _log(
+            event="payment.captured", source="client",
+            order=order, razorpay_payment_id=razorpay_payment_id,
+            amount_paise=amount_paise,
+        )
 
-    logger.info(
-        "Payment captured (client): order=%s payment=%s → Processing",
-        order.id, razorpay_payment_id,
-    )
-    return {"success": True, "message": "Payment verified successfully", "order_id": order.id}
+        logger.info(
+            "Payment captured (client): order=%s payment=%s → Processing",
+            order.id, razorpay_payment_id,
+        )
+        return {"success": True, "message": "Payment verified successfully", "order_id": order.id}
+
+    except Exception as exc:
+        logger.exception("Database transaction failed during client capture: %s", exc)
+        return {"success": False, "error": "An internal database error occurred while completing payment."}
 
 
 # ─── Payment capture — Razorpay webhook ──────────────────────────────────────
@@ -258,11 +248,6 @@ def capture_payment_from_webhook(
 ) -> None:
     """
     Idempotent. Called from RazorpayWebhookView on payment.captured event.
-
-    The entire flow is inside a SINGLE transaction.atomic() with
-    select_for_update() so the idempotency check and the write are atomic.
-
-    Stock deduction uses deduct_stock_for_order from orders/stock.py.
     """
     with transaction.atomic():
         try:
@@ -329,7 +314,6 @@ def mark_payment_failed_from_webhook(
 ) -> None:
     """
     Called on payment.failed webhook. Idempotent.
-    Never overwrites Paid/Refunded status.
     """
     try:
         order = Order.objects.get(razorpay_order_id=rzp_order_id)
@@ -369,17 +353,6 @@ def mark_payment_failed_from_webhook(
 def cancel_order_with_refund(order: Order) -> dict:
     """
     Cancels an order and handles refund + stock restoration atomically.
-
-    Cancellable statuses: Pending, Processing, Confirmed
-    Not cancellable: Shipped, Delivered, Cancelled
-
-    Stock restore:
-      - Delegates to restore_stock_for_order (orders/stock.py).
-      - Guarded by order.stock_deducted AND order.stock_restored flags.
-
-    Refund:
-      - Triggered automatically if order was paid.
-      - Guarded by PaymentLog check + payment_status check inside lock.
     """
     CANCELLABLE = ("Pending", "Processing", "Confirmed")
 
@@ -403,7 +376,7 @@ def cancel_order_with_refund(order: Order) -> dict:
     with transaction.atomic():
         order = Order.objects.select_for_update().get(id=order.id)
 
-        # Double-check inside lock (concurrent cancel may have beaten us)
+        # Double-check inside lock
         if order.order_status == "Cancelled":
             return {"success": False, "error": "Order was already cancelled."}
 
@@ -438,12 +411,14 @@ def cancel_order_with_refund(order: Order) -> dict:
                 refund_initiated = True
                 note = "Order cancelled. Refund initiated — will reflect in 5–7 business days."
 
+                # FIXED: Converted Decimal safe integer casting for refunds
+                amount_paise = int(Decimal(str(order.total_amount)) * 100)
                 _log(
                     event="payment.refunded", source="manual",
                     order=order,
                     razorpay_payment_id=order.razorpay_payment_id,
                     razorpay_refund_id=refund_id,
-                    amount_paise=int(order.total_amount * 100),
+                    amount_paise=amount_paise,
                     raw_payload=refund,
                 )
 
@@ -453,12 +428,14 @@ def cancel_order_with_refund(order: Order) -> dict:
                 order.save(update_fields=[
                     "payment_status", "order_status", "stock_restored",
                 ])
+                
+                amount_paise = int(Decimal(str(order.total_amount)) * 100)
                 _log(
                     event="payment.refunded", source="manual",
                     order=order,
                     razorpay_payment_id=order.razorpay_payment_id,
                     success=False, error_description=str(exc),
-                    amount_paise=int(order.total_amount * 100),
+                    amount_paise=amount_paise,
                 )
                 logger.error("Auto-refund failed for order %s: %s", order.id, exc)
                 note = (
@@ -486,21 +463,6 @@ def cancel_order_with_refund(order: Order) -> dict:
 def initiate_refund(order: Order, *, restore_stock: bool = False) -> dict:
     """
     Admin-triggered refund after approving an OrderReturnRequest.
-
-    IMPORTANT: restore_stock should always be False when called from
-    process_refund_for_return(), because stock was already restored in
-    approve_return_request(). Passing True here would double-restore.
-
-    The restore_stock parameter is retained for edge-case backward
-    compatibility only (e.g. a direct admin call that skipped approval).
-    Normal flow: approve_return_request() → process_refund_for_return()
-    with restore_stock=False.
-
-    Idempotency:
-      - Checks PaymentLog for existing refund log.
-      - Checks payment_status inside row lock.
-
-    Returns: {'success': bool, 'refund_id': str, 'error': str}
     """
     with transaction.atomic():
         order = Order.objects.select_for_update().get(id=order.id)
@@ -520,8 +482,6 @@ def initiate_refund(order: Order, *, restore_stock: bool = False) -> dict:
                 "error": "A refund has already been processed for this order.",
             }
 
-        # Optionally restore stock — only if caller explicitly requests it
-        # AND the guards confirm it hasn't been done yet.
         if restore_stock and order.stock_deducted and not order.stock_restored:
             restore_stock_for_order(order)
             order.stock_restored = True
@@ -532,12 +492,14 @@ def initiate_refund(order: Order, *, restore_stock: bool = False) -> dict:
             order.payment_status = "Refunded"
             order.save(update_fields=["payment_status", "stock_restored"])
 
+            # FIXED: Safe type-casting calculation here too
+            amount_paise = int(Decimal(str(order.total_amount)) * 100)
             _log(
                 event="payment.refunded", source="manual",
                 order=order,
                 razorpay_payment_id=order.razorpay_payment_id,
                 razorpay_refund_id=refund_id,
-                amount_paise=int(order.total_amount * 100),
+                amount_paise=amount_paise,
                 raw_payload=refund,
             )
             logger.info("Manual refund initiated: order=%s refund=%s", order.id, refund_id)
@@ -546,12 +508,14 @@ def initiate_refund(order: Order, *, restore_stock: bool = False) -> dict:
         except Exception as exc:
             order.payment_status = "Refund Pending"
             order.save(update_fields=["payment_status", "stock_restored"])
+            
+            amount_paise = int(Decimal(str(order.total_amount)) * 100)
             _log(
                 event="payment.refunded", source="manual",
                 order=order,
                 razorpay_payment_id=order.razorpay_payment_id,
                 success=False, error_description=str(exc),
-                amount_paise=int(order.total_amount * 100),
+                amount_paise=amount_paise,
             )
             logger.error("Manual refund failed for order %s: %s", order.id, exc)
             return {"success": False, "error": str(exc)}

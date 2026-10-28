@@ -18,7 +18,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name="watchandshop", name="video_url",
-            field=models.URLField(blank=True, default="", help_text="Legacy video URL (unused)."),
+            field=models.URLField(max_length=500, blank=True, default="", help_text="Legacy video URL (unused)."),
         ),
         migrations.AlterField(
             model_name="watchandshop", name="thumbnail",
@@ -28,4 +28,3 @@ class Migration(migrations.Migration):
             ),
         ),
     ]
-
